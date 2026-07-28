@@ -1,9 +1,9 @@
 /*
   XIAO ESP32C3 + AE-BNO055-BO UART orientation streamer
 
-  BNO055からUARTで姿勢を読み、次の2経路へ同時配信する。
+  BNO055からUARTで姿勢を読み、タクトスイッチの状態と合わせて次の2経路へ配信する。
     1. USB Serial: デバッグしやすいJSON Lines
-    2. Bluetooth LE: Web Bluetooth向けの20バイト固定長Notify
+    2. Bluetooth LE: 姿勢20バイトとスイッチ8バイトの固定長Notify
 
   AE-BNO055-BOは電源投入前にUARTモードへ設定すること。
 
@@ -12,13 +12,23 @@
     XIAO GND  -> AE-BNO055-BO GND
     XIAO D7   <- AE-BNO055-BO SDA/T (sensor TX)
     XIAO D6   -> AE-BNO055-BO SCL/R (sensor RX)
+    XIAO D2   -> tact switch -> GND
 
-  BLE Notifyペイロード（little-endian、合計20バイト）:
+  タクトスイッチ入力はINPUT_PULLUPなので外付けプルアップ抵抗は不要。
+  押すとLOW、離すとHIGHになる。
+
+  姿勢Notifyペイロード（little-endian、合計20バイト）:
      0.. 3: uint32_t millis()
      4..11: int16_t quaternion W/X/Y/Z（1.0 = 16384）
     12..17: int16_t heading/roll/pitch（1度 = 16）
         18: int8_t temperature
         19: uint8_t calibration（SYS/GYR/ACC/MAGを各2bit）
+
+  スイッチNotifyペイロード（little-endian、合計8バイト）:
+     0.. 3: uint32_t millis()
+         4: uint8_t flags（bit 0: pressed）
+         5: uint8_t reserved
+     6.. 7: uint16_t press count（起動後の押下回数）
 */
 
 #include <Arduino.h>
@@ -30,9 +40,11 @@ constexpr uint32_t kUsbSerialBaud = 115200;
 constexpr uint32_t kSensorUartBaud = 115200;
 constexpr int8_t kSensorRxPin = 20;  // XIAO ESP32C3 D7
 constexpr int8_t kSensorTxPin = 21;  // XIAO ESP32C3 D6
+constexpr int8_t kButtonPin = 4;      // XIAO ESP32C3 D2
 constexpr uint16_t kSampleIntervalMs = 20;  // 50 Hz
 constexpr uint16_t kStatusIntervalMs = 500;
 constexpr uint16_t kUartTimeoutMs = 30;
+constexpr uint16_t kButtonDebounceMs = 20;
 
 // BNO055 UARTプロトコルのフレーム種別。データシート上の固定値。
 constexpr uint8_t kUartStartByte = 0xAA;
@@ -61,6 +73,7 @@ constexpr uint8_t kUseExternalCrystal = 0x80;
 // 0x1Aから14バイト読むとEuler角6バイトとQuaternion8バイトを一括取得できる。
 constexpr uint8_t kOrientationPayloadLength = 14;
 constexpr uint8_t kBlePayloadLength = 20;
+constexpr uint8_t kBleButtonPayloadLength = 8;
 constexpr double kQuaternionScale = 1.0 / 16384.0;
 constexpr double kEulerScale = 1.0 / 16.0;
 
@@ -69,12 +82,20 @@ constexpr char kBleServiceUuid[] =
     "f3641400-00b0-4240-ba50-05ca45bf8abc";
 constexpr char kBleOrientationUuid[] =
     "f3641401-00b0-4240-ba50-05ca45bf8abc";
+constexpr char kBleButtonUuid[] =
+    "f3641402-00b0-4240-ba50-05ca45bf8abc";
 
 // 温度・キャリブレーションは姿勢より更新頻度が低いためキャッシュする。
 uint8_t cachedCalibration = 0;
 int8_t cachedTemperature = 0;
 uint32_t uartErrorCount = 0;
 bool sensorReady = false;
+
+// 機械接点のチャタリングを除去するため、生入力と確定状態を別々に保持する。
+bool buttonRawPressed = false;
+bool buttonPressed = false;
+uint32_t buttonRawChangedAt = 0;
+uint16_t buttonPressCount = 0;
 
 // BLEコールバックはBluetoothタスクから呼ばれるため、loop()と共有する値はvolatileにする。
 volatile bool bleConnected = false;
@@ -83,6 +104,7 @@ volatile bool bleConnectionEventPending = false;
 volatile bool bleConnectionEventState = false;
 BLEServer *bleServer = nullptr;
 BLECharacteristic *bleOrientationCharacteristic = nullptr;
+BLECharacteristic *bleButtonCharacteristic = nullptr;
 
 class OrientationServerCallbacks : public BLEServerCallbacks {
  public:
@@ -258,6 +280,11 @@ void writeUint32Le(uint8_t *buffer, uint32_t value) {
   buffer[3] = (value >> 24) & 0xFF;
 }
 
+void writeUint16Le(uint8_t *buffer, uint16_t value) {
+  buffer[0] = value & 0xFF;
+  buffer[1] = (value >> 8) & 0xFF;
+}
+
 void writeInt16Le(uint8_t *buffer, int16_t value) {
   const uint16_t raw = static_cast<uint16_t>(value);
   buffer[0] = raw & 0xFF;
@@ -303,10 +330,26 @@ void initializeBle() {
   // 0x2902(CCCD)はブラウザがNotify購読を有効化するために必要。
   bleOrientationCharacteristic->addDescriptor(new BLE2902());
 
+  // スイッチは姿勢とは更新周期が異なるため別Characteristicにする。
+  // これにより、既定ATT MTUで収まる20バイト姿勢形式との互換性も維持できる。
+  bleButtonCharacteristic = service->createCharacteristic(
+      kBleButtonUuid,
+      BLECharacteristic::PROPERTY_READ |
+          BLECharacteristic::PROPERTY_NOTIFY);
+  bleButtonCharacteristic->addDescriptor(new BLE2902());
+
   // 接続直後にREADされても必ず20バイト返るよう、初期値も固定長にする。
   uint8_t initialValue[kBlePayloadLength] = {};
   bleOrientationCharacteristic->setValue(
       initialValue, sizeof(initialValue));
+
+  // Web側はNotify購読後にREADして、接続前から押されていた状態も取得する。
+  uint8_t initialButtonValue[kBleButtonPayloadLength] = {};
+  writeUint32Le(&initialButtonValue[0], millis());
+  initialButtonValue[4] = buttonPressed ? 0x01 : 0x00;
+  writeUint16Le(&initialButtonValue[6], buttonPressCount);
+  bleButtonCharacteristic->setValue(
+      initialButtonValue, sizeof(initialButtonValue));
   service->start();
 
   BLEAdvertising *advertising = BLEDevice::getAdvertising();
@@ -346,6 +389,55 @@ void notifyBleOrientation(
   bleOrientationCharacteristic->notify();
 }
 
+void publishButtonState(uint32_t timestamp, bool sendNotification) {
+  if (bleButtonCharacteristic == nullptr) {
+    return;
+  }
+
+  uint8_t payload[kBleButtonPayloadLength] = {};
+  writeUint32Le(&payload[0], timestamp);
+  payload[4] = buttonPressed ? 0x01 : 0x00;
+  // payload[5]は将来のフラグ追加に備えて0のまま予約する。
+  writeUint16Le(&payload[6], buttonPressCount);
+
+  // 未接続中もCharacteristicのREAD値を最新状態へ更新しておく。
+  bleButtonCharacteristic->setValue(payload, sizeof(payload));
+  if (sendNotification && bleConnected) {
+    bleButtonCharacteristic->notify();
+  }
+}
+
+void printButtonEvent(uint32_t timestamp) {
+  Serial.print("{\"type\":\"button\",\"t\":");
+  Serial.print(timestamp);
+  Serial.print(",\"pressed\":");
+  Serial.print(buttonPressed ? "true" : "false");
+  Serial.print(",\"press_count\":");
+  Serial.print(buttonPressCount);
+  Serial.println("}");
+}
+
+void updateButton(uint32_t now) {
+  // INPUT_PULLUPなのでLOWが押下。生入力が変わるたびに安定待ち時間をやり直す。
+  const bool rawPressed = digitalRead(kButtonPin) == LOW;
+  if (rawPressed != buttonRawPressed) {
+    buttonRawPressed = rawPressed;
+    buttonRawChangedAt = now;
+  }
+
+  // 同じ値が一定時間続いた場合だけ確定し、接点バウンスによる多重押下を防ぐ。
+  if (
+      rawPressed != buttonPressed &&
+      now - buttonRawChangedAt >= kButtonDebounceMs) {
+    buttonPressed = rawPressed;
+    if (buttonPressed) {
+      buttonPressCount++;
+    }
+    publishButtonState(now, true);
+    printButtonEvent(now);
+  }
+}
+
 void printJsonString(const char *value) {
   // ステータスメッセージをJSON文字列として壊さないため、最低限のエスケープを行う。
   Serial.print('"');
@@ -380,7 +472,7 @@ void printReady() {
       "{\"type\":\"ready\",\"sensor\":\"BNO055\","
       "\"transport\":\"uart\",\"format\":\"quaternion\","
       "\"read_mode\":\"uart\",\"rate_hz\":50,"
-      "\"ble_name\":\"XRift-BNO055\"}");
+      "\"ble_name\":\"XRift-BNO055\",\"button_pin\":\"D2\"}");
 }
 
 void printBleConnectionEvent() {
@@ -396,6 +488,12 @@ void setup() {
   while (!Serial && millis() - waitStartedAt < 2000) {
     delay(10);
   }
+
+  // D2とGNDの間にスイッチを接続する。起動時の状態をBLE初期値へ反映する。
+  pinMode(kButtonPin, INPUT_PULLUP);
+  buttonRawPressed = digitalRead(kButtonPin) == LOW;
+  buttonPressed = buttonRawPressed;
+  buttonRawChangedAt = millis();
 
   // BNO055 UARTは115200/8N1固定。TX/RXは交差接続する。
   Serial1.begin(
@@ -434,6 +532,9 @@ void loop() {
     bleRestartAdvertising = false;
     bleServer->startAdvertising();
   }
+
+  // センサー未接続時や50Hz待機中でも、スイッチは毎loopで監視して遅延を抑える。
+  updateButton(now);
 
   if (!sensorReady) {
     // 配線修正やセンサー再起動後に、XIAOをリセットせず自動復帰できるようにする。
@@ -529,6 +630,10 @@ void loop() {
   Serial.print(calAccel);
   Serial.print(",\"mag\":");
   Serial.print(calMag);
+  Serial.print("},\"button\":{\"pressed\":");
+  Serial.print(buttonPressed ? "true" : "false");
+  Serial.print(",\"press_count\":");
+  Serial.print(buttonPressCount);
   Serial.print("},\"uart_errors\":");
   Serial.print(uartErrorCount);
   Serial.println("}");

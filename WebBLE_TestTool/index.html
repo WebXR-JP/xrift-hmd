@@ -227,6 +227,14 @@
       font-weight: 500;
     }
 
+    .switch-state[data-pressed="true"] {
+      color: var(--primary);
+    }
+
+    .switch-state[data-pressed="false"] {
+      color: var(--muted);
+    }
+
     .axis-grid {
       display: grid;
       gap: 8px;
@@ -431,6 +439,20 @@
         </section>
 
         <section class="panel">
+          <h2>タクトスイッチ</h2>
+          <div class="metrics" aria-live="polite">
+            <div class="metric">
+              <div class="metric-label">D2 / GPIO4</div>
+              <div class="metric-value switch-state" id="buttonState">未受信</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Press count</div>
+              <div class="metric-value" id="buttonCount">--</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2>表示</h2>
           <div class="select-row">
             <label for="axisMode">軸変換</label>
@@ -477,6 +499,7 @@
     const bleDeviceName = "XRift-BNO055";
     const bleServiceUuid = "f3641400-00b0-4240-ba50-05ca45bf8abc";
     const bleOrientationUuid = "f3641401-00b0-4240-ba50-05ca45bf8abc";
+    const bleButtonUuid = "f3641402-00b0-4240-ba50-05ca45bf8abc";
     const threeModuleUrl = "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js";
 
     // DOM参照は起動時に一度だけ取得し、50Hzの受信処理では検索し直さない。
@@ -498,6 +521,8 @@
     const calGyro = document.getElementById("calGyro");
     const calAccel = document.getElementById("calAccel");
     const calMag = document.getElementById("calMag");
+    const buttonState = document.getElementById("buttonState");
+    const buttonCount = document.getElementById("buttonCount");
 
     // USB SerialとBLEは同じhandlePacket()へ合流する。
     // connectionKindだけを見れば、切断ボタンやステータス表示を共通化できる。
@@ -510,6 +535,7 @@
     let bleDevice = null;
     let bleServer = null;
     let bleCharacteristic = null;
+    let bleButtonCharacteristic = null;
     let lastPacketAt = 0;
     let packetsThisSecond = 0;
     let framesThisSecond = 0;
@@ -704,6 +730,27 @@
       calGyro.textContent = data.cal?.gyro ?? "--";
       calAccel.textContent = data.cal?.accel ?? "--";
       calMag.textContent = data.cal?.mag ?? "--";
+      if (data.button) {
+        updateButtonTelemetry(data.button);
+      }
+    }
+
+    function updateButtonTelemetry(data) {
+      if (typeof data?.pressed !== "boolean") {
+        return;
+      }
+
+      buttonState.textContent = data.pressed ? "押下中" : "離している";
+      buttonState.dataset.pressed = String(data.pressed);
+      buttonCount.textContent = Number.isInteger(data.press_count)
+        ? String(data.press_count)
+        : "--";
+    }
+
+    function resetButtonTelemetry() {
+      buttonState.textContent = "未受信";
+      delete buttonState.dataset.pressed;
+      buttonCount.textContent = "--";
     }
 
     function resetOrientationSamples() {
@@ -1108,6 +1155,14 @@
         return;
       }
 
+      if (data.type === "button") {
+        updateButtonTelemetry(data);
+        appendLog(
+          `button: ${data.pressed ? "pressed" : "released"} (${data.press_count ?? "--"})`
+        );
+        return;
+      }
+
       if (data.type !== "imu") {
         return;
       }
@@ -1225,6 +1280,31 @@
       });
     }
 
+    function handleBleButtonValue(view) {
+      if (!(view instanceof DataView) || view.byteLength < 8) {
+        appendLog(`invalid BLE button packet: ${view?.byteLength ?? 0} bytes`);
+        return null;
+      }
+
+      // flagsのbit 0が押下状態。press_countはXIAO起動後の押下回数。
+      const data = {
+        t: view.getUint32(0, true),
+        pressed: (view.getUint8(4) & 0x01) !== 0,
+        press_count: view.getUint16(6, true),
+      };
+      updateButtonTelemetry(data);
+      return data;
+    }
+
+    function handleBleButtonNotification(event) {
+      const data = handleBleButtonValue(event.target.value);
+      if (data) {
+        appendLog(
+          `button: ${data.pressed ? "pressed" : "released"} (${data.press_count})`
+        );
+      }
+    }
+
     async function readSerialLoop() {
       // USBは任意の位置で分割されて届くため、改行までlineBufferへ蓄積する。
       const decoder = new TextDecoderStream();
@@ -1269,6 +1349,7 @@
         await port.open({ baudRate });
         connectionKind = "serial";
         lineBuffer = "";
+        resetButtonTelemetry();
         setButtons(true);
         setStatus("USB接続済み", "ok");
         appendLog(`opened at ${baudRate} baud`);
@@ -1309,6 +1390,7 @@
       }
       hasReading = false;
       resetOrientationSamples();
+      resetButtonTelemetry();
       setButtons(false);
       setStatus("未接続");
       appendLog("USB closed");
@@ -1316,6 +1398,7 @@
 
     function handleBleDisconnected() {
       bleCharacteristic = null;
+      bleButtonCharacteristic = null;
       bleServer = null;
       bleDevice = null;
       if (connectionKind === "ble") {
@@ -1323,6 +1406,7 @@
       }
       hasReading = false;
       resetOrientationSamples();
+      resetButtonTelemetry();
       setButtons(false);
       setStatus("BLE切断", "warn");
       appendLog("BLE disconnected");
@@ -1386,11 +1470,22 @@
         bleCharacteristic = await service.getCharacteristic(
           bleOrientationUuid
         );
+        bleButtonCharacteristic = await service.getCharacteristic(
+          bleButtonUuid
+        );
         bleCharacteristic.addEventListener(
           "characteristicvaluechanged",
           handleBleNotification
         );
         await bleCharacteristic.startNotifications();
+        bleButtonCharacteristic.addEventListener(
+          "characteristicvaluechanged",
+          handleBleButtonNotification
+        );
+        await bleButtonCharacteristic.startNotifications();
+
+        // 購読開始前から押されていた場合も表示できるよう、現在値を一度READする。
+        handleBleButtonValue(await bleButtonCharacteristic.readValue());
 
         connectionKind = "ble";
         hasReading = false;
@@ -1416,6 +1511,7 @@
         bleDevice = null;
         bleServer = null;
         bleCharacteristic = null;
+        bleButtonCharacteristic = null;
         setButtons(false);
       }
     }
@@ -1429,6 +1525,14 @@
         await bleCharacteristic.stopNotifications().catch(() => {});
       }
 
+      if (bleButtonCharacteristic) {
+        bleButtonCharacteristic.removeEventListener(
+          "characteristicvaluechanged",
+          handleBleButtonNotification
+        );
+        await bleButtonCharacteristic.stopNotifications().catch(() => {});
+      }
+
       if (bleDevice) {
         bleDevice.removeEventListener(
           "gattserverdisconnected",
@@ -1440,6 +1544,7 @@
       }
 
       bleCharacteristic = null;
+      bleButtonCharacteristic = null;
       bleServer = null;
       bleDevice = null;
       if (connectionKind === "ble") {
@@ -1447,6 +1552,7 @@
       }
       hasReading = false;
       resetOrientationSamples();
+      resetButtonTelemetry();
       setButtons(false);
       setStatus("未接続");
       appendLog("BLE closed");
