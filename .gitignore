@@ -1,0 +1,5 @@
+# Arduino CLI/IDE build outputs
+arduino/**/build/
+
+# Local web-server and debug logs
+*.log

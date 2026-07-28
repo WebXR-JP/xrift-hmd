@@ -1,0 +1,1528 @@
+<!doctype html>
+<!-- XIAO ESP32C3 と BNO055 の姿勢を USB Serial / Web Bluetooth で表示するテストツール。 -->
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XIAO ESP32C3 BNO055 姿勢ビューア</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #141815;
+      --surface: #1f2521;
+      --surface-2: #293129;
+      --text: #eef5ed;
+      --muted: #a8b4aa;
+      --line: #3b453e;
+      --primary: #7bd88f;
+      --primary-ink: #092112;
+      --accent: #ffcf6a;
+      --danger: #ff8a8a;
+      --x-axis: #ff6c68;
+      --y-axis: #7bd88f;
+      --z-axis: #69a7ff;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      letter-spacing: 0;
+    }
+
+    button,
+    select {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+    }
+
+    .title {
+      min-width: 220px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 500;
+    }
+
+    .subtitle {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .button {
+      min-height: 38px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .button.primary {
+      border-color: transparent;
+      background: var(--primary);
+      color: var(--primary-ink);
+      font-weight: 500;
+    }
+
+    .button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+
+    .button svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 2;
+    }
+
+    .main {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 320px;
+    }
+
+    .viewport {
+      position: relative;
+      min-height: 460px;
+      overflow: hidden;
+    }
+
+    #scene {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .hud {
+      position: absolute;
+      left: 18px;
+      bottom: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .chip {
+      min-height: 30px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 9px;
+      border: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface) 82%, transparent);
+      color: var(--text);
+      font-size: 12px;
+      backdrop-filter: blur(8px);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 99px;
+      background: var(--muted);
+    }
+
+    .dot.ok {
+      background: var(--primary);
+    }
+
+    .dot.warn {
+      background: var(--accent);
+    }
+
+    .dot.error {
+      background: var(--danger);
+    }
+
+    .side {
+      min-width: 0;
+      border-left: 1px solid var(--line);
+      background: var(--surface);
+      overflow: auto;
+    }
+
+    .panel {
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .metric {
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .metric-value {
+      margin-top: 4px;
+      overflow-wrap: anywhere;
+      font-variant-numeric: tabular-nums;
+      font-size: 18px;
+      font-weight: 500;
+    }
+
+    .axis-grid {
+      display: grid;
+      gap: 8px;
+    }
+
+    .axis-row {
+      display: grid;
+      grid-template-columns: 22px 1fr auto;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .axis-mark {
+      width: 22px;
+      height: 4px;
+      border-radius: 99px;
+    }
+
+    .axis-x {
+      background: var(--x-axis);
+    }
+
+    .axis-y {
+      background: var(--y-axis);
+    }
+
+    .axis-z {
+      background: var(--z-axis);
+    }
+
+    .calibration {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .cal-item {
+      min-width: 0;
+      text-align: center;
+    }
+
+    .cal-label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .cal-value {
+      margin-top: 4px;
+      font-variant-numeric: tabular-nums;
+      font-size: 20px;
+      font-weight: 500;
+    }
+
+    .select-row {
+      display: grid;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .select-row select {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+      color: var(--text);
+      padding: 7px 9px;
+    }
+
+    .log {
+      max-height: 160px;
+      overflow: auto;
+      margin: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #111411;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 820px) {
+      .main {
+        grid-template-columns: 1fr;
+      }
+
+      .viewport {
+        min-height: 58vh;
+      }
+
+      .side {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 520px) {
+      .topbar {
+        padding: 12px;
+      }
+
+      .toolbar {
+        width: 100%;
+      }
+
+      .button {
+        flex: 1 1 140px;
+      }
+
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="title">
+        <h1>BNO055 姿勢ビューア</h1>
+        <div class="subtitle">XIAO ESP32C3 / USB Serial / Web Bluetooth</div>
+      </div>
+      <div class="toolbar">
+        <button class="button primary" id="connectButton" type="button" aria-label="USBシリアルへ接続">
+          <span aria-hidden="true">↔</span>
+          USB接続
+        </button>
+        <button class="button" id="bleConnectButton" type="button" aria-label="Bluetooth LEへ接続">
+          <span aria-hidden="true">B</span>
+          BLE接続
+        </button>
+        <button class="button" id="disconnectButton" type="button" disabled aria-label="現在の接続を切断">
+          <span aria-hidden="true">×</span>
+          切断
+        </button>
+        <button class="button" id="zeroButton" type="button" disabled aria-label="現在の姿勢を原点にする">
+          <span aria-hidden="true">◎</span>
+          ゼロ合わせ
+        </button>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="viewport" aria-label="基板の3D姿勢">
+        <canvas id="scene"></canvas>
+        <div class="hud" aria-live="polite">
+          <div class="chip"><span class="dot" id="statusDot"></span><span id="statusText">未接続</span></div>
+          <div class="chip">fps <span id="frameRate">--</span></div>
+          <div class="chip">rx <span id="serialRate">--</span> Hz</div>
+        </div>
+      </section>
+
+      <aside class="side" aria-label="受信データ">
+        <section class="panel">
+          <h2>姿勢</h2>
+          <div class="metrics">
+            <div class="metric">
+              <div class="metric-label">Heading</div>
+              <div class="metric-value"><span id="headingValue">--</span>°</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Roll</div>
+              <div class="metric-value"><span id="rollValue">--</span>°</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Pitch</div>
+              <div class="metric-value"><span id="pitchValue">--</span>°</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Temperature</div>
+              <div class="metric-value"><span id="tempValue">--</span>°C</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>キャリブレーション</h2>
+          <div class="calibration">
+            <div class="cal-item">
+              <div class="cal-label">SYS</div>
+              <div class="cal-value" id="calSys">--</div>
+            </div>
+            <div class="cal-item">
+              <div class="cal-label">GYR</div>
+              <div class="cal-value" id="calGyro">--</div>
+            </div>
+            <div class="cal-item">
+              <div class="cal-label">ACC</div>
+              <div class="cal-value" id="calAccel">--</div>
+            </div>
+            <div class="cal-item">
+              <div class="cal-label">MAG</div>
+              <div class="cal-value" id="calMag">--</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>表示</h2>
+          <div class="select-row">
+            <label for="axisMode">軸変換</label>
+            <select id="axisMode">
+              <option value="direct">直接表示</option>
+              <option value="flip-yz">Y/Z反転</option>
+              <option value="swap-yz">Y/Z入れ替え</option>
+            </select>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>軸色</h2>
+          <div class="axis-grid">
+            <div class="axis-row">
+              <span class="axis-mark axis-x"></span>
+              <span>X</span>
+              <span>赤</span>
+            </div>
+            <div class="axis-row">
+              <span class="axis-mark axis-y"></span>
+              <span>Y</span>
+              <span>緑</span>
+            </div>
+            <div class="axis-row">
+              <span class="axis-mark axis-z"></span>
+              <span>Z</span>
+              <span>青</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>ログ</h2>
+          <pre class="log" id="log" aria-live="polite"></pre>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <script type="module">
+    // ESP32側と共有する通信仕様。BLE UUIDを変更する場合はスケッチ側も同時に変更する。
+    const baudRate = 115200;
+    const bleDeviceName = "XRift-BNO055";
+    const bleServiceUuid = "f3641400-00b0-4240-ba50-05ca45bf8abc";
+    const bleOrientationUuid = "f3641401-00b0-4240-ba50-05ca45bf8abc";
+    const threeModuleUrl = "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js";
+
+    // DOM参照は起動時に一度だけ取得し、50Hzの受信処理では検索し直さない。
+    const connectButton = document.getElementById("connectButton");
+    const bleConnectButton = document.getElementById("bleConnectButton");
+    const disconnectButton = document.getElementById("disconnectButton");
+    const zeroButton = document.getElementById("zeroButton");
+    const axisMode = document.getElementById("axisMode");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const frameRate = document.getElementById("frameRate");
+    const serialRate = document.getElementById("serialRate");
+    const log = document.getElementById("log");
+    const headingValue = document.getElementById("headingValue");
+    const rollValue = document.getElementById("rollValue");
+    const pitchValue = document.getElementById("pitchValue");
+    const tempValue = document.getElementById("tempValue");
+    const calSys = document.getElementById("calSys");
+    const calGyro = document.getElementById("calGyro");
+    const calAccel = document.getElementById("calAccel");
+    const calMag = document.getElementById("calMag");
+
+    // USB SerialとBLEは同じhandlePacket()へ合流する。
+    // connectionKindだけを見れば、切断ボタンやステータス表示を共通化できる。
+    let port = null;
+    let reader = null;
+    let inputDone = null;
+    let keepReading = false;
+    let lineBuffer = "";
+    let connectionKind = null;
+    let bleDevice = null;
+    let bleServer = null;
+    let bleCharacteristic = null;
+    let lastPacketAt = 0;
+    let packetsThisSecond = 0;
+    let framesThisSecond = 0;
+    let lastRateAt = performance.now();
+    let lastTelemetryAt = 0;
+    let sensorToLocalOffset = null;
+    let lastSensorTime = null;
+    let usingEulerFallback = false;
+    let validQuaternionStreak = 0;
+    const orientationSamples = [];
+    // 低遅延を優先し、受信済みの最新姿勢を待ち時間なしで描画する。
+    // 通信間隔のばらつきが見える場合は20〜65msへ増やすと滑らかさを戻せる。
+    const interpolationDelayMs = 0;
+
+    // Three.jsが読み込めない場合も同じ姿勢演算を使えるよう、必要最小限の
+    // Quaternion演算をページ内に持つ。成分順は x, y, z, w。
+    class Quaternion {
+      constructor(x = 0, y = 0, z = 0, w = 1) {
+        this.set(x, y, z, w);
+      }
+
+      set(x, y, z, w) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+        this.w = w;
+        return this;
+      }
+
+      identity() {
+        return this.set(0, 0, 0, 1);
+      }
+
+      copy(q) {
+        return this.set(q.x, q.y, q.z, q.w);
+      }
+
+      clone() {
+        return new Quaternion(this.x, this.y, this.z, this.w);
+      }
+
+      normalize() {
+        const length = Math.hypot(this.x, this.y, this.z, this.w) || 1;
+        this.x /= length;
+        this.y /= length;
+        this.z /= length;
+        this.w /= length;
+        return this;
+      }
+
+      invert() {
+        this.x *= -1;
+        this.y *= -1;
+        this.z *= -1;
+        return this.normalize();
+      }
+
+      multiply(q) {
+        const ax = this.x;
+        const ay = this.y;
+        const az = this.z;
+        const aw = this.w;
+        const bx = q.x;
+        const by = q.y;
+        const bz = q.z;
+        const bw = q.w;
+
+        this.x = aw * bx + ax * bw + ay * bz - az * by;
+        this.y = aw * by - ax * bz + ay * bw + az * bx;
+        this.z = aw * bz + ax * by - ay * bx + az * bw;
+        this.w = aw * bw - ax * bx - ay * by - az * bz;
+        return this.normalize();
+      }
+
+      slerp(q, t) {
+        let bx = q.x;
+        let by = q.y;
+        let bz = q.z;
+        let bw = q.w;
+        let cosHalfTheta = this.x * bx + this.y * by + this.z * bz + this.w * bw;
+
+        // qと-qは同じ姿勢を表す。内積が負なら-q側を使い、短い回転経路を選ぶ。
+        if (cosHalfTheta < 0) {
+          bx = -bx;
+          by = -by;
+          bz = -bz;
+          bw = -bw;
+          cosHalfTheta = -cosHalfTheta;
+        }
+
+        if (cosHalfTheta >= 1) {
+          return this;
+        }
+
+        const sqrSinHalfTheta = 1 - cosHalfTheta * cosHalfTheta;
+        // 角度差が極小のときは除算が不安定になるため線形補間へ退避する。
+        if (sqrSinHalfTheta <= Number.EPSILON) {
+          const s = 1 - t;
+          this.x = s * this.x + t * bx;
+          this.y = s * this.y + t * by;
+          this.z = s * this.z + t * bz;
+          this.w = s * this.w + t * bw;
+          return this.normalize();
+        }
+
+        const sinHalfTheta = Math.sqrt(sqrSinHalfTheta);
+        const halfTheta = Math.atan2(sinHalfTheta, cosHalfTheta);
+        const ratioA = Math.sin((1 - t) * halfTheta) / sinHalfTheta;
+        const ratioB = Math.sin(t * halfTheta) / sinHalfTheta;
+
+        this.x = this.x * ratioA + bx * ratioB;
+        this.y = this.y * ratioA + by * ratioB;
+        this.z = this.z * ratioA + bz * ratioB;
+        this.w = this.w * ratioA + bw * ratioB;
+        return this.normalize();
+      }
+    }
+
+    const latestQuaternion = new Quaternion();
+    const displayQuaternion = new Quaternion();
+    const targetQuaternion = new Quaternion();
+    const zeroOffset = new Quaternion();
+    let hasReading = false;
+    let backend = null;
+    let rendererWidth = 0;
+    let rendererHeight = 0;
+    let rendererDpr = 0;
+
+    const canvas = document.getElementById("scene");
+
+    function resizeRenderer() {
+      if (!backend) {
+        return;
+      }
+
+      const { clientWidth, clientHeight } = canvas;
+      const width = Math.max(clientWidth, 1);
+      const height = Math.max(clientHeight, 1);
+      const dpr = Math.min(window.devicePixelRatio, 2);
+      // canvasのwidth/height再代入は描画内容を消す。実寸が変わったときだけ更新する。
+      if (
+        width === rendererWidth &&
+        height === rendererHeight &&
+        dpr === rendererDpr
+      ) {
+        return;
+      }
+
+      rendererWidth = width;
+      rendererHeight = height;
+      rendererDpr = dpr;
+      backend.resize(width, height, dpr);
+    }
+
+    const resizeObserver = new ResizeObserver(resizeRenderer);
+    resizeObserver.observe(canvas);
+
+    function setStatus(text, kind = "idle") {
+      statusText.textContent = text;
+      statusDot.className = "dot";
+      if (kind === "ok") {
+        statusDot.classList.add("ok");
+      } else if (kind === "warn") {
+        statusDot.classList.add("warn");
+      } else if (kind === "error") {
+        statusDot.classList.add("error");
+      }
+    }
+
+    function appendLog(message) {
+      const timestamp = new Date().toLocaleTimeString();
+      log.textContent = `${timestamp} ${message}\n${log.textContent}`.slice(0, 2200);
+    }
+
+    function setButtons(isConnected) {
+      connectButton.disabled = isConnected;
+      bleConnectButton.disabled = isConnected;
+      disconnectButton.disabled = !isConnected;
+      zeroButton.disabled = !isConnected || !hasReading;
+    }
+
+    function formatNumber(value, digits = 1) {
+      return Number.isFinite(value) ? value.toFixed(digits) : "--";
+    }
+
+    function updateTelemetry(data) {
+      headingValue.textContent = formatNumber(data.heading);
+      rollValue.textContent = formatNumber(data.roll);
+      pitchValue.textContent = formatNumber(data.pitch);
+      tempValue.textContent = formatNumber(data.temp_c, 0);
+      calSys.textContent = data.cal?.sys ?? "--";
+      calGyro.textContent = data.cal?.gyro ?? "--";
+      calAccel.textContent = data.cal?.accel ?? "--";
+      calMag.textContent = data.cal?.mag ?? "--";
+    }
+
+    function resetOrientationSamples() {
+      orientationSamples.length = 0;
+      sensorToLocalOffset = null;
+      lastSensorTime = null;
+    }
+
+    function queueOrientation(sensorTime, quaternion, arrivedAt) {
+      // millis()の巻き戻り、再起動、長時間欠落を検出したら古い補間列を捨てる。
+      if (
+        lastSensorTime !== null &&
+        (sensorTime <= lastSensorTime || sensorTime - lastSensorTime > 500)
+      ) {
+        resetOrientationSamples();
+      }
+
+      // ESP32のmillis()とブラウザのperformance.now()の時刻差を推定する。
+      // 遅れて届いたパケットで推定値が急に悪化しないよう、増加はゆっくり追従する。
+      const observedOffset = arrivedAt - sensorTime;
+      if (sensorToLocalOffset === null) {
+        sensorToLocalOffset = observedOffset;
+      } else {
+        // Follow clock drift slowly without treating a delayed USB chunk as drift.
+        sensorToLocalOffset = Math.min(
+          observedOffset,
+          sensorToLocalOffset + 0.02
+        );
+      }
+
+      orientationSamples.push({ t: sensorTime, q: quaternion.clone() });
+      if (orientationSamples.length > 24) {
+        orientationSamples.shift();
+      }
+      lastSensorTime = sensorTime;
+    }
+
+    function interpolateOrientation(now) {
+      if (!orientationSamples.length || sensorToLocalOffset === null) {
+        return;
+      }
+
+      // 現在より少し過去のセンサー時刻を描くことで、前後2サンプルのSLERPが可能になる。
+      const renderTime = now - sensorToLocalOffset - interpolationDelayMs;
+      while (
+        orientationSamples.length > 2 &&
+        orientationSamples[1].t <= renderTime
+      ) {
+        orientationSamples.shift();
+      }
+
+      const first = orientationSamples[0];
+      const second = orientationSamples[1];
+      if (!second || renderTime <= first.t) {
+        displayQuaternion.copy(first.q);
+        return;
+      }
+
+      if (renderTime >= second.t) {
+        displayQuaternion.copy(second.q);
+        return;
+      }
+
+      const mix = (renderTime - first.t) / (second.t - first.t);
+      displayQuaternion.copy(first.q).slerp(second.q, mix);
+    }
+
+    function convertedQuaternion(raw) {
+      // センサー基板の取り付け方向と3Dモデルの軸定義が違う場合の補正。
+      const q = raw.clone();
+
+      if (axisMode.value === "flip-yz") {
+        q.y *= -1;
+        q.z *= -1;
+      } else if (axisMode.value === "swap-yz") {
+        const y = q.y;
+        q.y = q.z;
+        q.z = y;
+      }
+
+      return q.normalize();
+    }
+
+    function axisAngleQuaternion(axisX, axisY, axisZ, angle) {
+      const half = angle / 2;
+      const scale = Math.sin(half);
+      return new Quaternion(axisX * scale, axisY * scale, axisZ * scale, Math.cos(half)).normalize();
+    }
+
+    function quaternionFromEulerDegrees(heading, roll, pitch) {
+      // BNO055のEuler出力を Z(yaw) -> Y(pitch) -> X(roll) の順で合成する。
+      // 通常はQuaternionを使い、これはQuaternion異常時だけの退避経路。
+      const degreesToRadians = Math.PI / 180;
+      const yawRotation = axisAngleQuaternion(0, 0, 1, heading * degreesToRadians);
+      const pitchRotation = axisAngleQuaternion(0, 1, 0, pitch * degreesToRadians);
+      const rollRotation = axisAngleQuaternion(1, 0, 0, roll * degreesToRadians);
+      return yawRotation.multiply(pitchRotation).multiply(rollRotation);
+    }
+
+    function idleQuaternion(now) {
+      const tilt = axisAngleQuaternion(1, 0, 0, -0.22);
+      const drift = axisAngleQuaternion(0, 0, 1, Math.sin(now * 0.00045) * 0.08);
+      return drift.multiply(tilt);
+    }
+
+    function rotateVector(q, vector) {
+      // 組み込みcanvas描画用の q * v * q^-1。Three.js非依存のフォールバックで使う。
+      const x = vector.x;
+      const y = vector.y;
+      const z = vector.z;
+      const qx = q.x;
+      const qy = q.y;
+      const qz = q.z;
+      const qw = q.w;
+      const ix = qw * x + qy * z - qz * y;
+      const iy = qw * y + qz * x - qx * z;
+      const iz = qw * z + qx * y - qy * x;
+      const iw = -qx * x - qy * y - qz * z;
+
+      return {
+        x: ix * qw + iw * -qx + iy * -qz - iz * -qy,
+        y: iy * qw + iw * -qy + iz * -qx - ix * -qz,
+        z: iz * qw + iw * -qz + ix * -qy - iy * -qx
+      };
+    }
+
+    function createThreeBackend(THREE, targetCanvas) {
+      // 通常経路。GPU描画で基板、部品、軸、グリッドを1つのGroupとして回転する。
+      const renderer = new THREE.WebGLRenderer({
+        canvas: targetCanvas,
+        antialias: true,
+        alpha: true,
+        preserveDrawingBuffer: true
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
+      camera.position.set(0, -38, 24);
+      camera.lookAt(0, 0, 0);
+
+      scene.add(new THREE.HemisphereLight(0xf4fff1, 0x243024, 1.7));
+
+      const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
+      keyLight.position.set(8, -10, 18);
+      scene.add(keyLight);
+
+      const fillLight = new THREE.DirectionalLight(0x9fc3ff, 0.85);
+      fillLight.position.set(-15, 6, 12);
+      scene.add(fillLight);
+
+      const boardGroup = new THREE.Group();
+      scene.add(boardGroup);
+
+      const pcbMaterial = new THREE.MeshStandardMaterial({ color: 0x2f7d4b, roughness: 0.62, metalness: 0.08 });
+      const edgeMaterial = new THREE.MeshStandardMaterial({ color: 0x111b13, roughness: 0.7 });
+      const goldMaterial = new THREE.MeshStandardMaterial({ color: 0xf0c35b, metalness: 0.7, roughness: 0.28 });
+      const chipMaterial = new THREE.MeshStandardMaterial({ color: 0x161a18, roughness: 0.45 });
+      const usbMaterial = new THREE.MeshStandardMaterial({ color: 0xb9c3c7, metalness: 0.8, roughness: 0.2 });
+      const glassMaterial = new THREE.MeshStandardMaterial({
+        color: 0x8fc8ff,
+        roughness: 0.2,
+        metalness: 0.1,
+        transparent: true,
+        opacity: 0.35
+      });
+
+      function addBox(parent, size, position, material) {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(...size), material);
+        mesh.position.set(...position);
+        parent.add(mesh);
+      }
+
+      addBox(boardGroup, [22, 18, 1], [0, 0, 0], pcbMaterial);
+      addBox(boardGroup, [22.4, 18.4, 0.32], [0, 0, -0.64], edgeMaterial);
+      addBox(boardGroup, [8.5, 4.5, 2.6], [0, -10.2, 1.15], usbMaterial);
+      addBox(boardGroup, [6.2, 6.2, 1.1], [0, 1.2, 1.05], chipMaterial);
+      addBox(boardGroup, [3.2, 2.4, 0.9], [-6.2, 3.8, 1.0], chipMaterial);
+      addBox(boardGroup, [2.8, 1.7, 0.8], [5.8, 4.3, 0.9], glassMaterial);
+
+      for (const side of [-1, 1]) {
+        for (let i = 0; i < 7; i += 1) {
+          addBox(boardGroup, [1.2, 1.2, 0.35], [side * 9.2, -6 + i * 2, 0.74], goldMaterial);
+        }
+      }
+
+      const axisRoot = new THREE.Group();
+      boardGroup.add(axisRoot);
+
+      function addAxis(direction, color, label) {
+        const dir = new THREE.Vector3(...direction).normalize();
+        const origin = new THREE.Vector3(0, 0, 1.1);
+        axisRoot.add(new THREE.ArrowHelper(dir, origin, 11, color, 2.4, 1.5));
+
+        const labelCanvas = document.createElement("canvas");
+        labelCanvas.width = 128;
+        labelCanvas.height = 128;
+        const context = labelCanvas.getContext("2d");
+        context.fillStyle = "#ffffff";
+        context.font = "600 64px system-ui, sans-serif";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(label, 64, 62);
+        const texture = new THREE.CanvasTexture(labelCanvas);
+        const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+        const sprite = new THREE.Sprite(material);
+        sprite.position.copy(origin.clone().add(dir.multiplyScalar(12.5)));
+        sprite.scale.set(2.2, 2.2, 2.2);
+        axisRoot.add(sprite);
+      }
+
+      addAxis([1, 0, 0], 0xff6c68, "X");
+      addAxis([0, 1, 0], 0x7bd88f, "Y");
+      addAxis([0, 0, 1], 0x69a7ff, "Z");
+
+      const grid = new THREE.GridHelper(54, 18, 0x546054, 0x333b35);
+      grid.rotation.x = Math.PI / 2;
+      grid.position.z = -8;
+      scene.add(grid);
+
+      return {
+        resize(width, height, dpr) {
+          renderer.setPixelRatio(dpr);
+          renderer.setSize(width, height, false);
+          camera.aspect = width / height;
+          camera.updateProjectionMatrix();
+        },
+        render(q) {
+          boardGroup.quaternion.set(q.x, q.y, q.z, q.w);
+          renderer.render(scene, camera);
+        }
+      };
+    }
+
+    function createCanvasBackend(targetCanvas) {
+      // CDNやWebGLが使えない環境向けの2Dフォールバック。
+      // 3D頂点をQuaternionで回転し、簡易透視投影して奥から順に塗る。
+      const context = targetCanvas.getContext("2d");
+      let width = 300;
+      let height = 150;
+      let dpr = 1;
+
+      const boardFaces = [
+        { color: "#1d5b36", points: [[-11, -9, -0.6], [11, -9, -0.6], [11, 9, -0.6], [-11, 9, -0.6]] },
+        { color: "#38a867", points: [[-11, -9, 0.6], [11, -9, 0.6], [11, 9, 0.6], [-11, 9, 0.6]] },
+        { color: "#215f3c", points: [[-11, -9, -0.6], [-11, 9, -0.6], [-11, 9, 0.6], [-11, -9, 0.6]] },
+        { color: "#184a2f", points: [[11, -9, -0.6], [11, 9, -0.6], [11, 9, 0.6], [11, -9, 0.6]] },
+        { color: "#246740", points: [[-11, -9, -0.6], [11, -9, -0.6], [11, -9, 0.6], [-11, -9, 0.6]] },
+        { color: "#2b7a4a", points: [[-11, 9, -0.6], [11, 9, -0.6], [11, 9, 0.6], [-11, 9, 0.6]] }
+      ];
+      const topParts = [
+        { color: "#151a17", points: [[-3.2, -2.0, 0.78], [3.2, -2.0, 0.78], [3.2, 4.2, 0.78], [-3.2, 4.2, 0.78]] },
+        { color: "#b9c3c7", points: [[-4.2, -11.8, 0.9], [4.2, -11.8, 0.9], [4.2, -7.2, 0.9], [-4.2, -7.2, 0.9]] },
+        { color: "#8fc8ff", points: [[4.4, 3.3, 0.82], [7.2, 3.3, 0.82], [7.2, 5.3, 0.82], [4.4, 5.3, 0.82]] },
+        { color: "#111411", points: [[-7.8, 2.8, 0.82], [-4.8, 2.8, 0.82], [-4.8, 5.0, 0.82], [-7.8, 5.0, 0.82]] }
+      ];
+
+      for (const side of [-1, 1]) {
+        for (let i = 0; i < 7; i += 1) {
+          const x = side * 9.2;
+          const y = -6 + i * 2;
+          topParts.push({
+            color: "#f0c35b",
+            points: [[x - 0.65, y - 0.65, 0.84], [x + 0.65, y - 0.65, 0.84], [x + 0.65, y + 0.65, 0.84], [x - 0.65, y + 0.65, 0.84]]
+          });
+        }
+      }
+
+      function viewTransform(point) {
+        return {
+          x: point.x,
+          y: point.y * 0.66 - point.z * 0.74,
+          z: point.y * 0.74 + point.z * 0.66
+        };
+      }
+
+      function project(point) {
+        const viewed = viewTransform(point);
+        const distance = 70;
+        const depth = distance - viewed.z;
+        const scale = Math.min(width, height) * 0.045 * distance / Math.max(depth, 20);
+        return {
+          x: width / 2 + viewed.x * scale,
+          y: height / 2 - viewed.y * scale,
+          z: viewed.z
+        };
+      }
+
+      function polygonFor(face, q) {
+        const projected = face.points.map(([x, y, z]) => project(rotateVector(q, { x, y, z })));
+        const z = projected.reduce((sum, point) => sum + point.z, 0) / projected.length;
+        return { color: face.color, projected, z };
+      }
+
+      function drawPolygon(poly) {
+        context.beginPath();
+        poly.projected.forEach((point, index) => {
+          if (index === 0) {
+            context.moveTo(point.x, point.y);
+          } else {
+            context.lineTo(point.x, point.y);
+          }
+        });
+        context.closePath();
+        context.fillStyle = poly.color;
+        context.fill();
+        context.strokeStyle = "rgba(238, 245, 237, 0.28)";
+        context.lineWidth = 1.2;
+        context.stroke();
+      }
+
+      function drawAxis(q, vector, color, label) {
+        const origin = project(rotateVector(q, { x: 0, y: 0, z: 1.5 }));
+        const end = project(rotateVector(q, vector));
+        context.strokeStyle = color;
+        context.fillStyle = color;
+        context.lineWidth = 3;
+        context.beginPath();
+        context.moveTo(origin.x, origin.y);
+        context.lineTo(end.x, end.y);
+        context.stroke();
+        context.beginPath();
+        context.arc(end.x, end.y, 4.5, 0, Math.PI * 2);
+        context.fill();
+        context.font = "600 13px system-ui, sans-serif";
+        context.fillText(label, end.x + 7, end.y - 7);
+      }
+
+      return {
+        resize(nextWidth, nextHeight, nextDpr) {
+          width = nextWidth;
+          height = nextHeight;
+          dpr = nextDpr;
+          targetCanvas.width = Math.max(1, Math.floor(width * dpr));
+          targetCanvas.height = Math.max(1, Math.floor(height * dpr));
+          context.setTransform(dpr, 0, 0, dpr, 0, 0);
+        },
+        render(q) {
+          context.clearRect(0, 0, width, height);
+          context.strokeStyle = "rgba(168, 180, 170, 0.16)";
+          context.lineWidth = 1;
+          for (let x = -width; x < width * 2; x += 34) {
+            context.beginPath();
+            context.moveTo(x, height * 0.72);
+            context.lineTo(x + width * 0.32, height);
+            context.stroke();
+          }
+          for (let x = -width; x < width * 2; x += 34) {
+            context.beginPath();
+            context.moveTo(x, height);
+            context.lineTo(x + width * 0.32, height * 0.72);
+            context.stroke();
+          }
+
+          [...boardFaces, ...topParts]
+            .map((face) => polygonFor(face, q))
+            .sort((a, b) => a.z - b.z)
+            .forEach(drawPolygon);
+
+          drawAxis(q, { x: 14, y: 0, z: 1.5 }, "#ff6c68", "X");
+          drawAxis(q, { x: 0, y: 14, z: 1.5 }, "#7bd88f", "Y");
+          drawAxis(q, { x: 0, y: 0, z: 15 }, "#69a7ff", "Z");
+        }
+      };
+    }
+
+    async function loadThreeWithTimeout() {
+      if (new URLSearchParams(window.location.search).get("renderer") === "canvas") {
+        throw new Error("Canvas renderer requested");
+      }
+
+      // オフライン時にimport()を待ち続けず、短時間で内蔵canvasへ切り替える。
+      const timeout = new Promise((_, reject) => {
+        window.setTimeout(() => reject(new Error("Three.js load timeout")), 2200);
+      });
+      return Promise.race([import(threeModuleUrl), timeout]);
+    }
+
+    async function initRenderer() {
+      try {
+        const THREE = await loadThreeWithTimeout();
+        backend = createThreeBackend(THREE, canvas);
+        appendLog("renderer: three.js");
+      } catch (error) {
+        backend = createCanvasBackend(canvas);
+        appendLog("renderer: built-in canvas");
+      }
+      resizeRenderer();
+    }
+
+    function handlePacket(data) {
+      // USB JSONとBLEバイナリを共通形式へ揃えた後の、唯一の姿勢入力口。
+      if (data.type === "ready") {
+        setStatus("センサー準備完了", "ok");
+        appendLog(data.read_mode ? `ready: ${data.read_mode}` : "ready");
+        return;
+      }
+
+      if (data.type === "error") {
+        setStatus(data.message || "センサーエラー", "error");
+        appendLog(data.message || "error");
+        return;
+      }
+
+      if (data.type !== "imu") {
+        return;
+      }
+
+      const { qw, qx, qy, qz } = data;
+      if (![qw, qx, qy, qz].every(Number.isFinite)) {
+        appendLog("invalid quaternion");
+        return;
+      }
+
+      // 正規Quaternionのノルムは1。壊れたUARTフレームなどを3Dへ直接渡さない。
+      const quaternionLength = Math.hypot(qw, qx, qy, qz);
+      const hasEuler = [data.heading, data.roll, data.pitch].every(Number.isFinite);
+      const quaternionIsValid = Math.abs(quaternionLength - 1) <= 0.002;
+      let orientationSourceChanged = false;
+
+      // 一度Eulerへ退避したら、25フレーム連続正常になるまで戻さない。
+      // 入力源が毎フレーム往復して見た目が震えるのを防ぐヒステリシス。
+      if (usingEulerFallback) {
+        validQuaternionStreak = quaternionIsValid
+          ? validQuaternionStreak + 1
+          : 0;
+        if (validQuaternionStreak >= 25) {
+          usingEulerFallback = false;
+          validQuaternionStreak = 0;
+          orientationSourceChanged = true;
+          appendLog("quaternion recovered");
+        }
+      } else if (!quaternionIsValid && hasEuler) {
+        usingEulerFallback = true;
+        validQuaternionStreak = 0;
+        orientationSourceChanged = true;
+        appendLog("quaternion invalid; using Euler fallback");
+      }
+
+      if (usingEulerFallback && hasEuler) {
+        latestQuaternion.copy(
+          quaternionFromEulerDegrees(data.heading, data.roll, data.pitch)
+        );
+      } else {
+        latestQuaternion.set(qx, qy, qz, qw).normalize();
+      }
+
+      targetQuaternion.copy(zeroOffset).multiply(convertedQuaternion(latestQuaternion));
+      if (orientationSourceChanged) {
+        resetOrientationSamples();
+        displayQuaternion.copy(targetQuaternion);
+      }
+      hasReading = true;
+      const arrivedAt = performance.now();
+      lastPacketAt = arrivedAt;
+      packetsThisSecond += 1;
+      zeroButton.disabled = false;
+
+      const sensorTime = Number(data.t);
+      if (Number.isFinite(sensorTime)) {
+        queueOrientation(sensorTime, targetQuaternion, arrivedAt);
+      } else {
+        displayQuaternion.copy(targetQuaternion);
+      }
+
+      if (arrivedAt - lastTelemetryAt >= 80) {
+        updateTelemetry(data);
+        setStatus(
+          usingEulerFallback
+            ? "Euler補完中"
+            : connectionKind === "ble"
+              ? "BLE受信中"
+              : "USB受信中",
+          usingEulerFallback ? "warn" : "ok"
+        );
+        lastTelemetryAt = arrivedAt;
+      }
+    }
+
+    function handleLine(line) {
+      if (!line) {
+        return;
+      }
+
+      try {
+        handlePacket(JSON.parse(line));
+      } catch {
+        appendLog(line);
+      }
+    }
+
+    function handleBleNotification(event) {
+      const view = event.target.value;
+      if (!(view instanceof DataView) || view.byteLength < 20) {
+        appendLog(`invalid BLE packet: ${view?.byteLength ?? 0} bytes`);
+        return;
+      }
+
+      // ESP32の20バイト固定長ペイロードをlittle-endianで復号する。
+      // 生Quaternionは1/16384、Euler角は1/16が実値の1単位。
+      const calibration = view.getUint8(19);
+      handlePacket({
+        type: "imu",
+        t: view.getUint32(0, true),
+        qw: view.getInt16(4, true) / 16384,
+        qx: view.getInt16(6, true) / 16384,
+        qy: view.getInt16(8, true) / 16384,
+        qz: view.getInt16(10, true) / 16384,
+        heading: view.getInt16(12, true) / 16,
+        roll: view.getInt16(14, true) / 16,
+        pitch: view.getInt16(16, true) / 16,
+        temp_c: view.getInt8(18),
+        cal: {
+          sys: (calibration >> 6) & 0x03,
+          gyro: (calibration >> 4) & 0x03,
+          accel: (calibration >> 2) & 0x03,
+          mag: calibration & 0x03,
+        },
+      });
+    }
+
+    async function readSerialLoop() {
+      // USBは任意の位置で分割されて届くため、改行までlineBufferへ蓄積する。
+      const decoder = new TextDecoderStream();
+      inputDone = port.readable.pipeTo(decoder.writable);
+      reader = decoder.readable.getReader();
+      keepReading = true;
+
+      try {
+        while (keepReading) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
+          }
+
+          lineBuffer += value;
+          let newlineIndex = lineBuffer.indexOf("\n");
+          while (newlineIndex >= 0) {
+            const line = lineBuffer.slice(0, newlineIndex).trim();
+            lineBuffer = lineBuffer.slice(newlineIndex + 1);
+            handleLine(line);
+            newlineIndex = lineBuffer.indexOf("\n");
+          }
+        }
+      } catch (error) {
+        appendLog(error.message);
+        setStatus("読み取り停止", "warn");
+      } finally {
+        reader.releaseLock();
+        reader = null;
+      }
+    }
+
+    async function connectSerial() {
+      if (!("serial" in navigator)) {
+        setStatus("Web Serial 非対応", "error");
+        appendLog("Web Serial API is not available in this browser.");
+        return;
+      }
+
+      try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate });
+        connectionKind = "serial";
+        lineBuffer = "";
+        setButtons(true);
+        setStatus("USB接続済み", "ok");
+        appendLog(`opened at ${baudRate} baud`);
+        await readSerialLoop();
+      } catch (error) {
+        appendLog(error.message);
+        setStatus("接続できません", "error");
+      } finally {
+        if (port?.readable === null && port?.writable === null) {
+          port = null;
+          if (connectionKind === "serial") {
+            connectionKind = null;
+          }
+        }
+        setButtons(Boolean(connectionKind));
+      }
+    }
+
+    async function disconnectSerial() {
+      keepReading = false;
+
+      if (reader) {
+        await reader.cancel().catch(() => {});
+      }
+
+      if (inputDone) {
+        await inputDone.catch(() => {});
+        inputDone = null;
+      }
+
+      if (port) {
+        await port.close().catch((error) => appendLog(error.message));
+        port = null;
+      }
+
+      if (connectionKind === "serial") {
+        connectionKind = null;
+      }
+      hasReading = false;
+      resetOrientationSamples();
+      setButtons(false);
+      setStatus("未接続");
+      appendLog("USB closed");
+    }
+
+    function handleBleDisconnected() {
+      bleCharacteristic = null;
+      bleServer = null;
+      bleDevice = null;
+      if (connectionKind === "ble") {
+        connectionKind = null;
+      }
+      hasReading = false;
+      resetOrientationSamples();
+      setButtons(false);
+      setStatus("BLE切断", "warn");
+      appendLog("BLE disconnected");
+    }
+
+    function wait(milliseconds) {
+      return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+    }
+
+    async function connectGattWithRetry(device, attempts = 3) {
+      // WindowsのWeb Bluetoothは、広告選択直後のGATT接続が一時的に失敗することがある。
+      // 同じユーザー操作で取得したBluetoothDeviceに対し、短い待機を挟んで再試行する。
+      let lastError = null;
+
+      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        try {
+          if (device.gatt.connected) {
+            return device.gatt;
+          }
+          return await device.gatt.connect();
+        } catch (error) {
+          lastError = error;
+          appendLog(`GATT attempt ${attempt}/${attempts}: ${error.message}`);
+          if (attempt < attempts) {
+            await wait(350 * attempt);
+          }
+        }
+      }
+
+      throw lastError;
+    }
+
+    async function connectBle() {
+      if (!window.isSecureContext) {
+        setStatus("HTTPSが必要", "error");
+        appendLog("Web Bluetooth requires HTTPS or localhost.");
+        return;
+      }
+
+      if (!("bluetooth" in navigator)) {
+        setStatus("Web Bluetooth非対応", "error");
+        appendLog("Web Bluetooth is not available in this browser.");
+        return;
+      }
+
+      try {
+        // 名前で候補を絞り、サービスUUIDはoptionalServicesへ明示して
+        // 接続後のgetPrimaryService()アクセス権を取得する。
+        bleDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ name: bleDeviceName }],
+          optionalServices: [bleServiceUuid],
+        });
+        bleDevice.addEventListener(
+          "gattserverdisconnected",
+          handleBleDisconnected
+        );
+
+        setStatus("BLE接続中", "warn");
+        bleServer = await connectGattWithRetry(bleDevice);
+        const service = await bleServer.getPrimaryService(bleServiceUuid);
+        bleCharacteristic = await service.getCharacteristic(
+          bleOrientationUuid
+        );
+        bleCharacteristic.addEventListener(
+          "characteristicvaluechanged",
+          handleBleNotification
+        );
+        await bleCharacteristic.startNotifications();
+
+        connectionKind = "ble";
+        hasReading = false;
+        resetOrientationSamples();
+        setButtons(true);
+        setStatus("BLE接続済み", "ok");
+        appendLog(`BLE connected: ${bleDevice.name || bleDeviceName}`);
+      } catch (error) {
+        appendLog(`${error.name || "Error"}: ${error.message}`);
+        appendLog(
+          "確認: XIAOを近づける / PCのBluetoothアンテナ / BLE 5.xアダプタ"
+        );
+        setStatus("BLE接続できません", "error");
+        if (bleDevice) {
+          bleDevice.removeEventListener(
+            "gattserverdisconnected",
+            handleBleDisconnected
+          );
+          if (bleDevice.gatt.connected) {
+            bleDevice.gatt.disconnect();
+          }
+        }
+        bleDevice = null;
+        bleServer = null;
+        bleCharacteristic = null;
+        setButtons(false);
+      }
+    }
+
+    async function disconnectBle() {
+      if (bleCharacteristic) {
+        bleCharacteristic.removeEventListener(
+          "characteristicvaluechanged",
+          handleBleNotification
+        );
+        await bleCharacteristic.stopNotifications().catch(() => {});
+      }
+
+      if (bleDevice) {
+        bleDevice.removeEventListener(
+          "gattserverdisconnected",
+          handleBleDisconnected
+        );
+        if (bleDevice.gatt.connected) {
+          bleDevice.gatt.disconnect();
+        }
+      }
+
+      bleCharacteristic = null;
+      bleServer = null;
+      bleDevice = null;
+      if (connectionKind === "ble") {
+        connectionKind = null;
+      }
+      hasReading = false;
+      resetOrientationSamples();
+      setButtons(false);
+      setStatus("未接続");
+      appendLog("BLE closed");
+    }
+
+    async function disconnectActiveConnection() {
+      if (connectionKind === "ble") {
+        await disconnectBle();
+      } else {
+        await disconnectSerial();
+      }
+    }
+
+    connectButton.addEventListener("click", connectSerial);
+    bleConnectButton.addEventListener("click", connectBle);
+    disconnectButton.addEventListener("click", disconnectActiveConnection);
+    zeroButton.addEventListener("click", () => {
+      if (!hasReading) {
+        return;
+      }
+      zeroOffset.copy(convertedQuaternion(latestQuaternion)).invert();
+      targetQuaternion.identity();
+      displayQuaternion.identity();
+      resetOrientationSamples();
+      appendLog("zeroed");
+    });
+    axisMode.addEventListener("change", () => {
+      if (!hasReading) {
+        return;
+      }
+      zeroOffset.copy(convertedQuaternion(latestQuaternion)).invert();
+      targetQuaternion.identity();
+      displayQuaternion.identity();
+      resetOrientationSamples();
+      appendLog(`axis mode: ${axisMode.value}`);
+    });
+
+    if ("serial" in navigator) {
+      navigator.serial.addEventListener("disconnect", async (event) => {
+        if (event.target === port) {
+          await disconnectSerial();
+        }
+      });
+    }
+
+    function render(now) {
+      resizeRenderer();
+      requestAnimationFrame(render);
+
+      if (hasReading) {
+        interpolateOrientation(now);
+      } else {
+        displayQuaternion.copy(idleQuaternion(now));
+      }
+
+      framesThisSecond += 1;
+      if (now - lastRateAt >= 1000) {
+        frameRate.textContent = String(framesThisSecond);
+        serialRate.textContent = hasReading ? String(packetsThisSecond) : "--";
+        framesThisSecond = 0;
+        packetsThisSecond = 0;
+        lastRateAt = now;
+
+        if (connectionKind && hasReading && now - lastPacketAt > 1200) {
+          setStatus("受信待ち", "warn");
+        }
+      }
+
+      backend?.render(displayQuaternion, now, hasReading);
+    }
+
+    setButtons(false);
+    setStatus("未接続");
+    initRenderer();
+    resizeRenderer();
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>
