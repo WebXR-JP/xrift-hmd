@@ -29,6 +29,8 @@ Bluetooth LE の両方へ配信します。ブラウザ側のビューアでは�
 
 ### 配線
 
+![DENDEN VR 配線図](docs/wiring-diagram.svg)
+
 | XIAO ESP32C3 | AE-BNO055-BO |
 | --- | --- |
 | 3V3 | VIN |

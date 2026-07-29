@@ -1,0 +1,206 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1050" viewBox="0 0 1500 1050" role="img" aria-labelledby="title desc">
+  <title id="title">DENDEN VR 配線図</title>
+  <desc id="desc">XIAO ESP32C3、AE-BNO055-BO、TC74HC4053AP、2個のジョイスティック、タクトスイッチの配線</desc>
+  <style>
+    text {
+      font-family: "Noto Sans JP", "Yu Gothic UI", "Meiryo", sans-serif;
+      fill: #172033;
+      letter-spacing: 0;
+    }
+    .title { font-size: 30px; font-weight: 700; }
+    .subtitle { font-size: 15px; fill: #526075; }
+    .device { fill: #ffffff; stroke: #9aa7b8; stroke-width: 2; rx: 8; }
+    .device-head { fill: #e9eef5; }
+    .device-name { font-size: 20px; font-weight: 700; }
+    .device-note { font-size: 13px; fill: #526075; }
+    .pin { fill: #ffffff; stroke-width: 2; }
+    .pin-label { font-size: 14px; font-weight: 600; }
+    .small { font-size: 12px; fill: #526075; }
+    .wire { fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+    .wire-label { font-size: 13px; font-weight: 700; paint-order: stroke; stroke: #f7f9fc; stroke-width: 5; stroke-linejoin: round; }
+    .power { stroke: #d32f2f; }
+    .ground { stroke: #374151; }
+    .uart { stroke: #1976d2; }
+    .analog { stroke: #2e7d32; }
+    .select { stroke: #d97706; }
+    .button { stroke: #7c3aed; }
+    .power-text { fill: #b42318; }
+    .ground-text { fill: #374151; }
+    .uart-text { fill: #155eaa; }
+    .analog-text { fill: #246b2e; }
+    .select-text { fill: #b45309; }
+    .button-text { fill: #6d28d9; }
+    .note-box { fill: #fff8e7; stroke: #d5a021; stroke-width: 2; rx: 8; }
+    .legend-box { fill: #ffffff; stroke: #c6cfdb; stroke-width: 1.5; rx: 8; }
+  </style>
+
+  <rect width="1500" height="1050" fill="#f7f9fc"/>
+  <text class="title" x="60" y="44">DENDEN VR 配線図</text>
+  <text class="subtitle" x="60" y="70">すべて3.3 V系 / TC74HC4053APはDIP16上面視 / TXとRXは交差接続</text>
+
+  <!-- Power rails -->
+  <path class="wire power" d="M60 105 H1440"/>
+  <text class="wire-label power-text" x="66" y="98">3V3</text>
+  <path class="wire ground" d="M60 990 H1440"/>
+  <text class="wire-label ground-text" x="66" y="982">GND（全機器共通）</text>
+
+  <!-- AE-BNO055-BO -->
+  <rect class="device" x="60" y="175" width="320" height="270"/>
+  <path class="device-head" d="M68 175 H372 A8 8 0 0 1 380 183 V225 H60 V183 A8 8 0 0 1 68 175 Z"/>
+  <text class="device-name" x="85" y="207">AE-BNO055-BO</text>
+  <text class="device-note" x="85" y="245">電源投入前にUARTモードへ設定</text>
+  <circle class="pin power" cx="180" cy="175" r="6"/>
+  <text class="pin-label power-text" x="192" y="181">VIN</text>
+  <path class="wire power" d="M180 175 V105"/>
+  <circle class="pin ground" cx="220" cy="445" r="6"/>
+  <text class="pin-label ground-text" x="232" y="437">GND</text>
+  <path class="wire ground" d="M220 445 V990"/>
+  <circle class="pin uart" cx="380" cy="325" r="6"/>
+  <text class="pin-label uart-text" x="250" y="319">SDA/T（TX）</text>
+  <circle class="pin uart" cx="380" cy="375" r="6"/>
+  <text class="pin-label uart-text" x="250" y="369">SCL/R（RX）</text>
+  <text class="small" x="85" y="420">115200 bps / 8N1</text>
+
+  <!-- XIAO ESP32C3 -->
+  <rect class="device" x="470" y="150" width="350" height="610"/>
+  <path class="device-head" d="M478 150 H812 A8 8 0 0 1 820 158 V205 H470 V158 A8 8 0 0 1 478 150 Z"/>
+  <text class="device-name" x="495" y="184">Seeed Studio XIAO ESP32C3</text>
+  <circle class="pin power" cx="570" cy="150" r="6"/>
+  <text class="pin-label power-text" x="582" y="158">3V3</text>
+  <path class="wire power" d="M570 150 V105"/>
+  <circle class="pin ground" cx="610" cy="760" r="6"/>
+  <text class="pin-label ground-text" x="622" y="751">GND</text>
+  <path class="wire ground" d="M610 760 V990"/>
+
+  <circle class="pin uart" cx="470" cy="325" r="6"/>
+  <text class="pin-label uart-text" x="488" y="320">D7 / GPIO20 / RX</text>
+  <circle class="pin uart" cx="470" cy="375" r="6"/>
+  <text class="pin-label uart-text" x="488" y="370">D6 / GPIO21 / TX</text>
+  <path class="wire uart" d="M380 325 H470"/>
+  <path class="wire uart" d="M380 375 H470"/>
+  <text class="wire-label uart-text" x="392" y="314">TX → RX</text>
+  <text class="wire-label uart-text" x="392" y="398">RX ← TX</text>
+
+  <circle class="pin analog" cx="820" cy="430" r="6"/>
+  <text class="pin-label analog-text" x="625" y="425">D1 / GPIO3 / ADC1_CH3</text>
+  <circle class="pin analog" cx="820" cy="480" r="6"/>
+  <text class="pin-label analog-text" x="625" y="475">D2 / GPIO4 / ADC1_CH4</text>
+  <circle class="pin select" cx="820" cy="530" r="6"/>
+  <text class="pin-label select-text" x="682" y="525">D3 / GPIO5</text>
+  <circle class="pin button" cx="820" cy="620" r="6"/>
+  <text class="pin-label button-text" x="682" y="615">D4 / GPIO6</text>
+  <circle class="pin button" cx="820" cy="670" r="6"/>
+  <text class="pin-label button-text" x="682" y="665">D5 / GPIO7</text>
+  <circle class="pin button" cx="645" cy="760" r="6"/>
+  <text class="pin-label button-text" x="505" y="735">D10 / GPIO10</text>
+  <text class="small" x="495" y="715">D0 / GPIO2はstrapping pinのため未使用</text>
+
+  <!-- TC74HC4053AP -->
+  <rect class="device" x="900" y="150" width="300" height="650"/>
+  <path class="device-head" d="M908 150 H1192 A8 8 0 0 1 1200 158 V205 H900 V158 A8 8 0 0 1 908 150 Z"/>
+  <text class="device-name" x="925" y="184">TC74HC4053AP</text>
+  <text class="device-note" x="925" y="225">3回路2:1アナログMUX</text>
+  <circle class="pin power" cx="1000" cy="150" r="6"/>
+  <text class="pin-label power-text" x="1012" y="158">16 VCC</text>
+  <path class="wire power" d="M1000 150 V105"/>
+  <circle class="pin ground" cx="1050" cy="800" r="6"/>
+  <path class="wire ground" d="M1050 800 V990"/>
+  <text class="pin-label ground-text" x="918" y="775">6 INH / 7 VEE / 8 GND / 9 C</text>
+  <text class="small" x="970" y="794">すべてGNDへ</text>
+
+  <circle class="pin analog" cx="900" cy="430" r="6"/>
+  <text class="pin-label analog-text" x="918" y="425">14 X-COM</text>
+  <circle class="pin analog" cx="900" cy="480" r="6"/>
+  <text class="pin-label analog-text" x="918" y="475">15 Y-COM</text>
+  <circle class="pin select" cx="900" cy="530" r="6"/>
+  <text class="pin-label select-text" x="918" y="525">11 A + 10 B</text>
+  <path class="wire analog" d="M820 430 H900"/>
+  <path class="wire analog" d="M820 480 H900"/>
+  <path class="wire select" d="M820 530 H900"/>
+  <text class="wire-label analog-text" x="832" y="420">X</text>
+  <text class="wire-label analog-text" x="832" y="470">Y</text>
+  <text class="wire-label select-text" x="832" y="552">選択</text>
+
+  <circle class="pin analog" cx="1200" cy="320" r="6"/>
+  <text class="pin-label analog-text" x="1115" y="314">12 0X</text>
+  <circle class="pin analog" cx="1200" cy="365" r="6"/>
+  <text class="pin-label analog-text" x="1115" y="359">2 0Y</text>
+  <circle class="pin analog" cx="1200" cy="660" r="6"/>
+  <text class="pin-label analog-text" x="1115" y="654">13 1X</text>
+  <circle class="pin analog" cx="1200" cy="705" r="6"/>
+  <text class="pin-label analog-text" x="1115" y="699">1 1Y</text>
+  <text class="small" x="925" y="590">D3 LOW: Joystick 1</text>
+  <text class="small" x="925" y="612">D3 HIGH: Joystick 2</text>
+  <text class="small" x="925" y="744">3 / 4 / 5（Z回路）は未接続</text>
+
+  <!-- Decoupling capacitor -->
+  <rect class="note-box" x="860" y="820" width="315" height="92"/>
+  <text class="pin-label" x="882" y="850">0.1 µF セラミックコンデンサ</text>
+  <text class="device-note" x="882" y="875">pin 16（VCC）↔ pin 8（GND）</text>
+  <text class="device-note" x="882" y="897">ICのできるだけ近くへ配置</text>
+
+  <!-- Joystick 1 -->
+  <rect class="device" x="1250" y="180" width="180" height="260"/>
+  <path class="device-head" d="M1258 180 H1422 A8 8 0 0 1 1430 188 V225 H1250 V188 A8 8 0 0 1 1258 180 Z"/>
+  <text class="device-name" x="1270" y="211">Joystick 1</text>
+  <text class="device-note" x="1270" y="246">KY-023互換</text>
+  <circle class="pin analog" cx="1250" cy="320" r="6"/>
+  <text class="pin-label analog-text" x="1270" y="325">VRx</text>
+  <circle class="pin analog" cx="1250" cy="365" r="6"/>
+  <text class="pin-label analog-text" x="1270" y="370">VRy</text>
+  <circle class="pin button" cx="1250" cy="410" r="6"/>
+  <text class="pin-label button-text" x="1270" y="415">SW</text>
+  <circle class="pin power" cx="1430" cy="270" r="6"/>
+  <text class="pin-label power-text" x="1368" y="264">+5V</text>
+  <circle class="pin ground" cx="1430" cy="290" r="6"/>
+  <text class="pin-label ground-text" x="1379" y="309">GND</text>
+  <path class="wire analog" d="M1200 320 H1250"/>
+  <path class="wire analog" d="M1200 365 H1250"/>
+  <path class="wire power" d="M1430 270 H1450 V105"/>
+  <path class="wire ground" d="M1430 290 H1470 V990"/>
+  <path class="wire button" d="M820 620 H850 V125 H1225 V410 H1250"/>
+  <text class="wire-label button-text" x="1095" y="118">D4 → SW1</text>
+
+  <!-- Joystick 2 -->
+  <rect class="device" x="1250" y="520" width="180" height="260"/>
+  <path class="device-head" d="M1258 520 H1422 A8 8 0 0 1 1430 528 V565 H1250 V528 A8 8 0 0 1 1258 520 Z"/>
+  <text class="device-name" x="1270" y="551">Joystick 2</text>
+  <text class="device-note" x="1270" y="586">KY-023互換</text>
+  <circle class="pin analog" cx="1250" cy="660" r="6"/>
+  <text class="pin-label analog-text" x="1270" y="665">VRx</text>
+  <circle class="pin analog" cx="1250" cy="705" r="6"/>
+  <text class="pin-label analog-text" x="1270" y="710">VRy</text>
+  <circle class="pin button" cx="1250" cy="750" r="6"/>
+  <text class="pin-label button-text" x="1270" y="755">SW</text>
+  <circle class="pin power" cx="1430" cy="610" r="6"/>
+  <text class="pin-label power-text" x="1368" y="604">+5V</text>
+  <circle class="pin ground" cx="1430" cy="630" r="6"/>
+  <text class="pin-label ground-text" x="1379" y="649">GND</text>
+  <path class="wire analog" d="M1200 660 H1250"/>
+  <path class="wire analog" d="M1200 705 H1250"/>
+  <path class="wire power" d="M1430 610 H1450"/>
+  <path class="wire ground" d="M1430 630 H1470"/>
+  <path class="wire button" d="M820 670 H845 V940 H1225 V750 H1250"/>
+  <text class="wire-label button-text" x="1035" y="933">D5 → SW2</text>
+  <text class="small power-text" x="1255" y="810">注意: +5V表記でも3V3へ接続</text>
+
+  <!-- Tact switch -->
+  <rect class="device" x="535" y="835" width="220" height="95"/>
+  <text class="device-name" x="565" y="870">タクトスイッチ</text>
+  <text class="device-note" x="565" y="897">外付け抵抗不要（INPUT_PULLUP）</text>
+  <circle class="pin button" cx="645" cy="835" r="6"/>
+  <circle class="pin ground" cx="645" cy="930" r="6"/>
+  <path class="wire button" d="M645 760 V835"/>
+  <path class="wire ground" d="M645 930 V990"/>
+  <text class="wire-label button-text" x="657" y="808">D10</text>
+
+  <!-- Legend -->
+  <rect class="legend-box" x="75" y="795" width="355" height="145"/>
+  <text class="pin-label" x="95" y="824">線の色</text>
+  <path class="wire power" d="M95 850 H145"/><text class="small" x="158" y="855">3V3</text>
+  <path class="wire ground" d="M250 850 H300"/><text class="small" x="313" y="855">GND</text>
+  <path class="wire uart" d="M95 880 H145"/><text class="small" x="158" y="885">UART</text>
+  <path class="wire analog" d="M250 880 H300"/><text class="small" x="313" y="885">アナログ軸</text>
+  <path class="wire select" d="M95 910 H145"/><text class="small" x="158" y="915">MUX選択</text>
+  <path class="wire button" d="M250 910 H300"/><text class="small" x="313" y="915">スイッチ</text>
+</svg>
