@@ -36,19 +36,41 @@ export type ButtonPacketInput = Omit<ButtonPacket, "type"> & {
   type?: "button";
 };
 
-export type DendenPacket = OrientationPacket | ButtonPacket;
+export interface JoystickState {
+  x: number;
+  y: number;
+  pressed: boolean;
+}
+
+export interface JoystickPacket {
+  type: "joystick";
+  t: number;
+  joysticks: [JoystickState, JoystickState];
+}
+
+export type JoystickPacketInput = Omit<JoystickPacket, "type"> & {
+  type?: "joystick";
+};
+
+export type DendenPacket =
+  | OrientationPacket
+  | ButtonPacket
+  | JoystickPacket;
 
 export const PROTOCOL_VERSION: 1;
 export const ORIENTATION_PAYLOAD_LENGTH: 20;
 export const BUTTON_PAYLOAD_LENGTH: 8;
+export const JOYSTICK_PAYLOAD_LENGTH: 14;
 export const QUATERNION_SCALE: 16384;
 export const EULER_SCALE: 16;
+export const JOYSTICK_AXIS_SCALE: 32767;
 
 export const BLE: Readonly<{
   deviceName: "DENDEN-VR";
   serviceUuid: "f3641400-00b0-4240-ba50-05ca45bf8abc";
   orientationCharacteristicUuid: "f3641401-00b0-4240-ba50-05ca45bf8abc";
   buttonCharacteristicUuid: "f3641402-00b0-4240-ba50-05ca45bf8abc";
+  joystickCharacteristicUuid: "f3641403-00b0-4240-ba50-05ca45bf8abc";
 }>;
 
 export class DendenProtocolError extends Error {
@@ -70,6 +92,10 @@ export function encodeOrientationPayload(
 ): Uint8Array;
 export function decodeButtonPayload(payload: BinaryPayload): ButtonPacket;
 export function encodeButtonPayload(packet: ButtonPacketInput): Uint8Array;
+export function decodeJoystickPayload(payload: BinaryPayload): JoystickPacket;
+export function encodeJoystickPayload(
+  packet: JoystickPacketInput
+): Uint8Array;
 export function decodeCharacteristicValue(
   characteristicUuid: string,
   payload: BinaryPayload

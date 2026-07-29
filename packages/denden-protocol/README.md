@@ -11,6 +11,7 @@ import {
   BLE,
   decodeOrientationPayload,
   decodeButtonPayload,
+  decodeJoystickPayload,
 } from "denden-protocol";
 
 const service = await gatt.getPrimaryService(BLE.serviceUuid);
@@ -44,6 +45,17 @@ orientationCharacteristic.addEventListener(
   temp_c: 27,
   cal: { sys: 3, gyro: 3, accel: 3, mag: 2 }
 }
+```
+
+ジョイスティックは2本分のX/Y軸を `-1.0` から `1.0` へ正規化し、
+押し込み状態と合わせて返します。
+
+```js
+const data = decodeJoystickPayload(value);
+
+// data.joysticks[0].x
+// data.joysticks[0].y
+// data.joysticks[0].pressed
 ```
 
 ## React

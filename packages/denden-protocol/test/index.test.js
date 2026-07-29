@@ -6,8 +6,10 @@ import {
   DendenProtocolError,
   decodeButtonPayload,
   decodeCharacteristicValue,
+  decodeJoystickPayload,
   decodeOrientationPayload,
   encodeButtonPayload,
+  encodeJoystickPayload,
   encodeOrientationPayload,
 } from "../src/index.js";
 
@@ -66,6 +68,34 @@ test("button payload round-trips and leaves reserved byte zeroed", () => {
   });
 });
 
+test("joystick payload encodes two normalized axes and button flags", () => {
+  const packet = {
+    t: 0x01020304,
+    joysticks: [
+      { x: 0.5, y: -1, pressed: true },
+      { x: 0, y: 0.25, pressed: false },
+    ],
+  };
+  const payload = encodeJoystickPayload(packet);
+
+  assert.deepEqual([...payload], [
+    0x04, 0x03, 0x02, 0x01,
+    0x00, 0x40, 0x01, 0x80,
+    0x00, 0x00, 0x00, 0x20,
+    0x01, 0x00,
+  ]);
+
+  const decoded = decodeJoystickPayload(payload);
+  assert.equal(decoded.type, "joystick");
+  assert.equal(decoded.t, packet.t);
+  assert.equal(decoded.joysticks[0].pressed, true);
+  assert.equal(decoded.joysticks[1].pressed, false);
+  assert.ok(Math.abs(decoded.joysticks[0].x - 0.5) < 0.0001);
+  assert.equal(decoded.joysticks[0].y, -1);
+  assert.equal(decoded.joysticks[1].x, 0);
+  assert.ok(Math.abs(decoded.joysticks[1].y - 0.25) < 0.0001);
+});
+
 test("characteristic decoder dispatches by UUID case-insensitively", () => {
   const buttonPayload = encodeButtonPayload({
     t: 1,
@@ -81,6 +111,20 @@ test("characteristic decoder dispatches by UUID case-insensitively", () => {
     "button"
   );
 
+  const joystickPayload = encodeJoystickPayload({
+    t: 1,
+    joysticks: [
+      { x: 0, y: 0, pressed: false },
+      { x: 0, y: 0, pressed: false },
+    ],
+  });
+  assert.equal(
+    decodeCharacteristicValue(
+      BLE.joystickCharacteristicUuid.toUpperCase(),
+      joystickPayload
+    ).type,
+    "joystick"
+  );
 });
 
 test("fixed-length packets reject truncated or extended input", () => {
@@ -103,5 +147,19 @@ test("encoders reject values that do not fit on the wire", () => {
       error instanceof DendenProtocolError &&
       error.code === "INVALID_FIELD" &&
       error.field === "temp_c"
+  );
+  assert.throws(
+    () =>
+      encodeJoystickPayload({
+        t: 1,
+        joysticks: [
+          { x: 1.1, y: 0, pressed: false },
+          { x: 0, y: 0, pressed: false },
+        ],
+      }),
+    (error) =>
+      error instanceof DendenProtocolError &&
+      error.code === "INVALID_FIELD" &&
+      error.field === "joysticks[0].x"
   );
 });

@@ -235,6 +235,82 @@
       color: var(--muted);
     }
 
+    .joystick-list {
+      display: grid;
+      gap: 14px;
+    }
+
+    .joystick-row {
+      display: grid;
+      grid-template-columns: 82px minmax(0, 1fr);
+      align-items: center;
+      gap: 14px;
+    }
+
+    .joystick-pad {
+      position: relative;
+      width: 82px;
+      height: 82px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+    }
+
+    .joystick-pad::before,
+    .joystick-pad::after {
+      position: absolute;
+      content: "";
+      background: var(--line);
+    }
+
+    .joystick-pad::before {
+      top: 50%;
+      left: 8px;
+      width: calc(100% - 16px);
+      height: 1px;
+    }
+
+    .joystick-pad::after {
+      top: 8px;
+      left: 50%;
+      width: 1px;
+      height: calc(100% - 16px);
+    }
+
+    .joystick-dot {
+      position: absolute;
+      z-index: 1;
+      top: 50%;
+      left: 50%;
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--primary-ink);
+      border-radius: 50%;
+      background: var(--primary);
+      transform: translate(-50%, -50%);
+      transition: left 40ms linear, top 40ms linear;
+    }
+
+    .joystick-details {
+      min-width: 0;
+    }
+
+    .joystick-title {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .joystick-values {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
     .axis-grid {
       display: grid;
       gap: 8px;
@@ -442,12 +518,44 @@
           <h2>タクトスイッチ</h2>
           <div class="metrics" aria-live="polite">
             <div class="metric">
-              <div class="metric-label">D2 / GPIO4</div>
+              <div class="metric-label">D10 / GPIO10</div>
               <div class="metric-value switch-state" id="buttonState">未受信</div>
             </div>
             <div class="metric">
               <div class="metric-label">Press count</div>
               <div class="metric-value" id="buttonCount">--</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>ジョイスティック</h2>
+          <div class="joystick-list" aria-live="polite">
+            <div class="joystick-row">
+              <div class="joystick-pad" aria-hidden="true">
+                <span class="joystick-dot" id="joystick1Dot"></span>
+              </div>
+              <div class="joystick-details">
+                <div class="joystick-title">Joystick 1</div>
+                <div class="joystick-values">
+                  <span>X <strong id="joystick1X">--</strong></span>
+                  <span>Y <strong id="joystick1Y">--</strong></span>
+                  <span class="switch-state" id="joystick1Button">未受信</span>
+                </div>
+              </div>
+            </div>
+            <div class="joystick-row">
+              <div class="joystick-pad" aria-hidden="true">
+                <span class="joystick-dot" id="joystick2Dot"></span>
+              </div>
+              <div class="joystick-details">
+                <div class="joystick-title">Joystick 2</div>
+                <div class="joystick-values">
+                  <span>X <strong id="joystick2X">--</strong></span>
+                  <span>Y <strong id="joystick2Y">--</strong></span>
+                  <span class="switch-state" id="joystick2Button">未受信</span>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -497,6 +605,7 @@
     import {
       BLE,
       decodeButtonPayload,
+      decodeJoystickPayload,
       decodeOrientationPayload,
     } from "../packages/denden-protocol/src/index.js";
 
@@ -506,6 +615,7 @@
     const bleServiceUuid = BLE.serviceUuid;
     const bleOrientationUuid = BLE.orientationCharacteristicUuid;
     const bleButtonUuid = BLE.buttonCharacteristicUuid;
+    const bleJoystickUuid = BLE.joystickCharacteristicUuid;
     const threeModuleUrl = "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js";
 
     // DOM参照は起動時に一度だけ取得し、50Hzの受信処理では検索し直さない。
@@ -529,6 +639,22 @@
     const calMag = document.getElementById("calMag");
     const buttonState = document.getElementById("buttonState");
     const buttonCount = document.getElementById("buttonCount");
+    const joystickDots = [
+      document.getElementById("joystick1Dot"),
+      document.getElementById("joystick2Dot"),
+    ];
+    const joystickXValues = [
+      document.getElementById("joystick1X"),
+      document.getElementById("joystick2X"),
+    ];
+    const joystickYValues = [
+      document.getElementById("joystick1Y"),
+      document.getElementById("joystick2Y"),
+    ];
+    const joystickButtons = [
+      document.getElementById("joystick1Button"),
+      document.getElementById("joystick2Button"),
+    ];
 
     // USB SerialとBLEは同じhandlePacket()へ合流する。
     // connectionKindだけを見れば、切断ボタンやステータス表示を共通化できる。
@@ -542,6 +668,7 @@
     let bleServer = null;
     let bleCharacteristic = null;
     let bleButtonCharacteristic = null;
+    let bleJoystickCharacteristic = null;
     let lastPacketAt = 0;
     let packetsThisSecond = 0;
     let framesThisSecond = 0;
@@ -756,6 +883,43 @@
       buttonState.textContent = "未受信";
       delete buttonState.dataset.pressed;
       buttonCount.textContent = "--";
+    }
+
+    function updateJoystickTelemetry(data) {
+      if (!Array.isArray(data?.joysticks) || data.joysticks.length !== 2) {
+        return;
+      }
+
+      data.joysticks.forEach((joystick, index) => {
+        if (
+          !Number.isFinite(joystick?.x) ||
+          !Number.isFinite(joystick?.y) ||
+          typeof joystick?.pressed !== "boolean"
+        ) {
+          return;
+        }
+
+        const x = Math.max(-1, Math.min(1, joystick.x));
+        const y = Math.max(-1, Math.min(1, joystick.y));
+        joystickDots[index].style.left = `${(x + 1) * 50}%`;
+        joystickDots[index].style.top = `${(1 - y) * 50}%`;
+        joystickXValues[index].textContent = formatNumber(x, 2);
+        joystickYValues[index].textContent = formatNumber(y, 2);
+        joystickButtons[index].textContent =
+          joystick.pressed ? "押下中" : "離している";
+        joystickButtons[index].dataset.pressed = String(joystick.pressed);
+      });
+    }
+
+    function resetJoystickTelemetry() {
+      for (let index = 0; index < 2; index += 1) {
+        joystickDots[index].style.left = "50%";
+        joystickDots[index].style.top = "50%";
+        joystickXValues[index].textContent = "--";
+        joystickYValues[index].textContent = "--";
+        joystickButtons[index].textContent = "未受信";
+        delete joystickButtons[index].dataset.pressed;
+      }
     }
 
     function resetOrientationSamples() {
@@ -1158,6 +1322,11 @@
         return;
       }
 
+      if (data.type === "joystick") {
+        updateJoystickTelemetry(data);
+        return;
+      }
+
       if (data.type !== "imu") {
         return;
       }
@@ -1249,6 +1418,21 @@
       }
     }
 
+    function handleBleJoystickValue(view) {
+      try {
+        const data = decodeJoystickPayload(view);
+        updateJoystickTelemetry(data);
+        return data;
+      } catch (error) {
+        appendLog(`invalid BLE joystick packet: ${error.message}`);
+        return null;
+      }
+    }
+
+    function handleBleJoystickNotification(event) {
+      handleBleJoystickValue(event.target.value);
+    }
+
     async function readSerialLoop() {
       // USBは任意の位置で分割されて届くため、改行までlineBufferへ蓄積する。
       const decoder = new TextDecoderStream();
@@ -1294,6 +1478,7 @@
         connectionKind = "serial";
         lineBuffer = "";
         resetButtonTelemetry();
+        resetJoystickTelemetry();
         setButtons(true);
         setStatus("USB接続済み", "ok");
         appendLog(`opened at ${baudRate} baud`);
@@ -1335,6 +1520,7 @@
       hasReading = false;
       resetOrientationSamples();
       resetButtonTelemetry();
+      resetJoystickTelemetry();
       setButtons(false);
       setStatus("未接続");
       appendLog("USB closed");
@@ -1343,6 +1529,7 @@
     function handleBleDisconnected() {
       bleCharacteristic = null;
       bleButtonCharacteristic = null;
+      bleJoystickCharacteristic = null;
       bleServer = null;
       bleDevice = null;
       if (connectionKind === "ble") {
@@ -1351,6 +1538,7 @@
       hasReading = false;
       resetOrientationSamples();
       resetButtonTelemetry();
+      resetJoystickTelemetry();
       setButtons(false);
       setStatus("BLE切断", "warn");
       appendLog("BLE disconnected");
@@ -1417,6 +1605,9 @@
         bleButtonCharacteristic = await service.getCharacteristic(
           bleButtonUuid
         );
+        bleJoystickCharacteristic = await service.getCharacteristic(
+          bleJoystickUuid
+        );
         bleCharacteristic.addEventListener(
           "characteristicvaluechanged",
           handleBleNotification
@@ -1427,9 +1618,15 @@
           handleBleButtonNotification
         );
         await bleButtonCharacteristic.startNotifications();
+        bleJoystickCharacteristic.addEventListener(
+          "characteristicvaluechanged",
+          handleBleJoystickNotification
+        );
+        await bleJoystickCharacteristic.startNotifications();
 
         // 購読開始前から押されていた場合も表示できるよう、現在値を一度READする。
         handleBleButtonValue(await bleButtonCharacteristic.readValue());
+        handleBleJoystickValue(await bleJoystickCharacteristic.readValue());
 
         connectionKind = "ble";
         hasReading = false;
@@ -1456,6 +1653,7 @@
         bleServer = null;
         bleCharacteristic = null;
         bleButtonCharacteristic = null;
+        bleJoystickCharacteristic = null;
         setButtons(false);
       }
     }
@@ -1477,6 +1675,14 @@
         await bleButtonCharacteristic.stopNotifications().catch(() => {});
       }
 
+      if (bleJoystickCharacteristic) {
+        bleJoystickCharacteristic.removeEventListener(
+          "characteristicvaluechanged",
+          handleBleJoystickNotification
+        );
+        await bleJoystickCharacteristic.stopNotifications().catch(() => {});
+      }
+
       if (bleDevice) {
         bleDevice.removeEventListener(
           "gattserverdisconnected",
@@ -1489,6 +1695,7 @@
 
       bleCharacteristic = null;
       bleButtonCharacteristic = null;
+      bleJoystickCharacteristic = null;
       bleServer = null;
       bleDevice = null;
       if (connectionKind === "ble") {
@@ -1497,6 +1704,7 @@
       hasReading = false;
       resetOrientationSamples();
       resetButtonTelemetry();
+      resetJoystickTelemetry();
       setButtons(false);
       setStatus("未接続");
       appendLog("BLE closed");

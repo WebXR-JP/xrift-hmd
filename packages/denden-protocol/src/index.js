@@ -2,14 +2,17 @@ export const PROTOCOL_VERSION = 1;
 
 export const ORIENTATION_PAYLOAD_LENGTH = 20;
 export const BUTTON_PAYLOAD_LENGTH = 8;
+export const JOYSTICK_PAYLOAD_LENGTH = 14;
 export const QUATERNION_SCALE = 16384;
 export const EULER_SCALE = 16;
+export const JOYSTICK_AXIS_SCALE = 32767;
 
 export const BLE = Object.freeze({
   deviceName: "DENDEN-VR",
   serviceUuid: "f3641400-00b0-4240-ba50-05ca45bf8abc",
   orientationCharacteristicUuid: "f3641401-00b0-4240-ba50-05ca45bf8abc",
   buttonCharacteristicUuid: "f3641402-00b0-4240-ba50-05ca45bf8abc",
+  joystickCharacteristicUuid: "f3641403-00b0-4240-ba50-05ca45bf8abc",
 });
 
 export class DendenProtocolError extends Error {
@@ -194,6 +197,100 @@ export function encodeButtonPayload(packet) {
   return payload;
 }
 
+export function decodeJoystickPayload(payload) {
+  const view = toDataView(payload, "joystick", JOYSTICK_PAYLOAD_LENGTH);
+  const flags = view.getUint8(12);
+  return {
+    type: "joystick",
+    t: view.getUint32(0, true),
+    joysticks: [
+      {
+        x: Math.max(-1, view.getInt16(4, true) / JOYSTICK_AXIS_SCALE),
+        y: Math.max(-1, view.getInt16(6, true) / JOYSTICK_AXIS_SCALE),
+        pressed: (flags & 0x01) !== 0,
+      },
+      {
+        x: Math.max(-1, view.getInt16(8, true) / JOYSTICK_AXIS_SCALE),
+        y: Math.max(-1, view.getInt16(10, true) / JOYSTICK_AXIS_SCALE),
+        pressed: (flags & 0x02) !== 0,
+      },
+    ],
+  };
+}
+
+function encodeJoystickAxis(value, fieldName) {
+  if (!Number.isFinite(value) || value < -1 || value > 1) {
+    throw new DendenProtocolError(
+      "INVALID_FIELD",
+      `${fieldName} must be a finite number from -1 to 1`,
+      { field: fieldName, value }
+    );
+  }
+  return Math.round(value * JOYSTICK_AXIS_SCALE);
+}
+
+export function encodeJoystickPayload(packet) {
+  if (!packet || typeof packet !== "object") {
+    throw new DendenProtocolError(
+      "INVALID_FIELD",
+      "joystick packet must be an object",
+      { field: "packet", value: packet }
+    );
+  }
+
+  assertIntegerInRange(packet.t, 0, 0xffffffff, "t");
+  if (!Array.isArray(packet.joysticks) || packet.joysticks.length !== 2) {
+    throw new DendenProtocolError(
+      "INVALID_FIELD",
+      "joysticks must contain exactly two entries",
+      { field: "joysticks", value: packet.joysticks }
+    );
+  }
+
+  const payload = new Uint8Array(JOYSTICK_PAYLOAD_LENGTH);
+  const view = new DataView(payload.buffer);
+  view.setUint32(0, packet.t, true);
+
+  let flags = 0;
+  packet.joysticks.forEach((joystick, index) => {
+    if (!joystick || typeof joystick !== "object") {
+      throw new DendenProtocolError(
+        "INVALID_FIELD",
+        `joysticks[${index}] must be an object`,
+        { field: `joysticks[${index}]`, value: joystick }
+      );
+    }
+    if (typeof joystick.pressed !== "boolean") {
+      throw new DendenProtocolError(
+        "INVALID_FIELD",
+        `joysticks[${index}].pressed must be a boolean`,
+        {
+          field: `joysticks[${index}].pressed`,
+          value: joystick.pressed,
+        }
+      );
+    }
+
+    const offset = 4 + index * 4;
+    view.setInt16(
+      offset,
+      encodeJoystickAxis(joystick.x, `joysticks[${index}].x`),
+      true
+    );
+    view.setInt16(
+      offset + 2,
+      encodeJoystickAxis(joystick.y, `joysticks[${index}].y`),
+      true
+    );
+    if (joystick.pressed) {
+      flags |= 1 << index;
+    }
+  });
+
+  view.setUint8(12, flags);
+  return payload;
+}
+
 export function decodeCharacteristicValue(characteristicUuid, payload) {
   const uuid = String(characteristicUuid).toLowerCase();
   if (uuid === BLE.orientationCharacteristicUuid) {
@@ -202,6 +299,10 @@ export function decodeCharacteristicValue(characteristicUuid, payload) {
   if (uuid === BLE.buttonCharacteristicUuid) {
     return decodeButtonPayload(payload);
   }
+  if (uuid === BLE.joystickCharacteristicUuid) {
+    return decodeJoystickPayload(payload);
+  }
+
   throw new DendenProtocolError(
     "UNKNOWN_CHARACTERISTIC",
     `Unknown DENDEN VR characteristic: ${characteristicUuid}`,
