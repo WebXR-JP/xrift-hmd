@@ -1,0 +1,32 @@
+{
+  "name": "denden-protocol",
+  "version": "0.1.0",
+  "description": "DENDEN VRプロトコルのトランスポート非依存codecとBLE識別子",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js",
+      "default": "./src/index.js"
+    }
+  },
+  "types": "./src/index.d.ts",
+  "files": [
+    "src",
+    "README.md",
+    "SPEC.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "denden-vr",
+    "ble",
+    "web-bluetooth",
+    "imu",
+    "bno055"
+  ],
+  "sideEffects": false
+}

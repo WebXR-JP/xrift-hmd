@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>XIAO ESP32C3 BNO055 姿勢ビューア</title>
+  <title>DENDEN VR 姿勢ビューア</title>
   <style>
     :root {
       color-scheme: dark;
@@ -360,7 +360,7 @@
   <div class="app">
     <header class="topbar">
       <div class="title">
-        <h1>BNO055 姿勢ビューア</h1>
+        <h1>DENDEN VR 姿勢ビューア</h1>
         <div class="subtitle">XIAO ESP32C3 / USB Serial / Web Bluetooth</div>
       </div>
       <div class="toolbar">
@@ -494,12 +494,18 @@
   </div>
 
   <script type="module">
+    import {
+      BLE,
+      decodeButtonPayload,
+      decodeOrientationPayload,
+    } from "../packages/denden-protocol/src/index.js";
+
     // ESP32側と共有する通信仕様。BLE UUIDを変更する場合はスケッチ側も同時に変更する。
     const baudRate = 115200;
-    const bleDeviceName = "XRift-BNO055";
-    const bleServiceUuid = "f3641400-00b0-4240-ba50-05ca45bf8abc";
-    const bleOrientationUuid = "f3641401-00b0-4240-ba50-05ca45bf8abc";
-    const bleButtonUuid = "f3641402-00b0-4240-ba50-05ca45bf8abc";
+    const bleDeviceName = BLE.deviceName;
+    const bleServiceUuid = BLE.serviceUuid;
+    const bleOrientationUuid = BLE.orientationCharacteristicUuid;
+    const bleButtonUuid = BLE.buttonCharacteristicUuid;
     const threeModuleUrl = "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js";
 
     // DOM参照は起動時に一度だけ取得し、50Hzの受信処理では検索し直さない。
@@ -1214,47 +1220,22 @@
     }
 
     function handleBleNotification(event) {
-      const view = event.target.value;
-      if (!(view instanceof DataView) || view.byteLength < 20) {
-        appendLog(`invalid BLE packet: ${view?.byteLength ?? 0} bytes`);
-        return;
+      try {
+        handlePacket(decodeOrientationPayload(event.target.value));
+      } catch (error) {
+        appendLog(`invalid BLE packet: ${error.message}`);
       }
-
-      // ESP32の20バイト固定長ペイロードをlittle-endianで復号する。
-      // 生Quaternionは1/16384、Euler角は1/16が実値の1単位。
-      const calibration = view.getUint8(19);
-      handlePacket({
-        type: "imu",
-        t: view.getUint32(0, true),
-        qw: view.getInt16(4, true) / 16384,
-        qx: view.getInt16(6, true) / 16384,
-        qy: view.getInt16(8, true) / 16384,
-        qz: view.getInt16(10, true) / 16384,
-        heading: view.getInt16(12, true) / 16,
-        roll: view.getInt16(14, true) / 16,
-        pitch: view.getInt16(16, true) / 16,
-        temp_c: view.getInt8(18),
-        cal: {
-          sys: (calibration >> 6) & 0x03,
-          gyro: (calibration >> 4) & 0x03,
-          accel: (calibration >> 2) & 0x03,
-          mag: calibration & 0x03,
-        },
-      });
     }
 
     function handleBleButtonValue(view) {
-      if (!(view instanceof DataView) || view.byteLength < 8) {
-        appendLog(`invalid BLE button packet: ${view?.byteLength ?? 0} bytes`);
+      let data;
+      try {
+        data = decodeButtonPayload(view);
+      } catch (error) {
+        appendLog(`invalid BLE button packet: ${error.message}`);
         return null;
       }
 
-      // flagsのbit 0が押下状態。press_countはXIAO起動後の押下回数。
-      const data = {
-        t: view.getUint32(0, true),
-        pressed: (view.getUint8(4) & 0x01) !== 0,
-        press_count: view.getUint16(6, true),
-      };
       updateButtonTelemetry(data);
       return data;
     }

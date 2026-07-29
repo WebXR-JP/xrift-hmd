@@ -1,6 +1,6 @@
-# XRift HMD
+# DENDEN VR
 
-XRift HMD は、Seeed Studio XIAO ESP32C3 と Bosch BNO055 搭載の
+DENDEN VR は、Seeed Studio XIAO ESP32C3 と Bosch BNO055 搭載の
 AE-BNO055-BO を使って、ヘッドマウントディスプレイ向けの姿勢データを取得する
 プロトタイプです。
 
@@ -14,6 +14,7 @@ Bluetooth LE の両方へ配信します。ブラウザ側のビューアでは�
 | --- | --- |
 | `arduino/xiao_bno055_orientation/` | XIAO ESP32C3 に書き込む Arduino ファームウェア |
 | `WebBLE_TestTool/` | USB Serial / Web Bluetooth で姿勢を確認するブラウザビューア |
+| `packages/denden-protocol/` | BLE バイナリの共通codecとDENDEN VRプロトコル v1仕様 |
 
 ## ハードウェア
 
@@ -65,7 +66,12 @@ USB Serial の出力例:
 
 ## Bluetooth LE
 
-BLE デバイス名は `XRift-BNO055` です。
+BLE デバイス名は `DENDEN-VR` です。
+
+アプリケーション側でペイロードを直接読む必要はありません。
+[`denden-protocol`](packages/denden-protocol/README.md) が、姿勢とボタンの
+encode/decode、TypeScript型、BLE UUIDを提供します。ワイヤ仕様は
+[`DENDEN VRプロトコル v1`](packages/denden-protocol/SPEC.md) に分離しています。
 
 | 種別 | UUID |
 | --- | --- |
@@ -104,14 +110,14 @@ BLE デバイス名は `XRift-BNO055` です。
 ローカルで起動する場合:
 
 ```powershell
-cd WebBLE_TestTool
 python -m http.server 8000
 ```
 
-その後、Chrome または Edge で `http://localhost:8000/` を開きます。
+リポジトリのルートで起動し、ChromeまたはEdgeで
+`http://localhost:8000/WebBLE_TestTool/` を開きます。
 
 - USB で使う場合は `USB接続` を押し、XIAO ESP32C3 のシリアルポートを選びます。
-- BLE で使う場合は `BLE接続` を押し、`XRift-BNO055` を選びます。
+- BLE で使う場合は `BLE接続` を押し、`DENDEN-VR` を選びます。
 - `ゼロ合わせ` は現在の姿勢を表示上の基準姿勢にします。
 - `軸変換` は実機の取り付け方向と画面上の回転方向が合わない場合に変更します。
 - タクトスイッチ欄には現在の押下状態と起動後の押下回数が表示されます。

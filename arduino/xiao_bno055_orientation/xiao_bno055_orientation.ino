@@ -77,7 +77,7 @@ constexpr uint8_t kBleButtonPayloadLength = 8;
 constexpr double kQuaternionScale = 1.0 / 16384.0;
 constexpr double kEulerScale = 1.0 / 16.0;
 
-constexpr char kBleDeviceName[] = "XRift-BNO055";
+constexpr char kBleDeviceName[] = "DENDEN-VR";
 constexpr char kBleServiceUuid[] =
     "f3641400-00b0-4240-ba50-05ca45bf8abc";
 constexpr char kBleOrientationUuid[] =
@@ -468,11 +468,13 @@ void updateCachedStatus() {
 }
 
 void printReady() {
-  Serial.println(
+  Serial.print(
       "{\"type\":\"ready\",\"sensor\":\"BNO055\","
       "\"transport\":\"uart\",\"format\":\"quaternion\","
       "\"read_mode\":\"uart\",\"rate_hz\":50,"
-      "\"ble_name\":\"XRift-BNO055\",\"button_pin\":\"D2\"}");
+      "\"ble_name\":\"");
+  Serial.print(kBleDeviceName);
+  Serial.println("\",\"button_pin\":\"D2\"}");
 }
 
 void printBleConnectionEvent() {
