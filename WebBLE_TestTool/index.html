@@ -1639,10 +1639,13 @@
       }
 
       try {
-        // 名前で候補を絞り、サービスUUIDはoptionalServicesへ明示して
-        // 接続後のgetPrimaryService()アクセス権を取得する。
+        // 端末によって名前が広告本体とスキャンレスポンスのどちらに載るかが異なる。
+        // 固定名またはサービスUUIDのどちらかで見つけ、GATTアクセス権も取得する。
         bleDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ name: bleDeviceName }],
+          filters: [
+            { name: bleDeviceName },
+            { services: [bleServiceUuid] },
+          ],
           optionalServices: [bleServiceUuid],
         });
         bleDevice.addEventListener(
