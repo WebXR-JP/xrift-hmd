@@ -4,13 +4,16 @@ import test from "node:test";
 import {
   BLE,
   DendenProtocolError,
-  decodeButtonPayload,
+  applyInputReport,
+  createInputState,
+  decodeCapabilitiesPayload,
   decodeCharacteristicValue,
-  decodeJoystickPayload,
+  decodeInputReportPayload,
   decodeOrientationPayload,
-  encodeButtonPayload,
-  encodeJoystickPayload,
+  encodeCapabilitiesPayload,
+  encodeInputReportPayload,
   encodeOrientationPayload,
+  toJoystickStates,
 } from "../src/index.js";
 
 const orientation = {
@@ -26,7 +29,7 @@ const orientation = {
   cal: { sys: 3, gyro: 2, accel: 1, mag: 0 },
 };
 
-test("orientation payload round-trips through the v1 wire format", () => {
+test("orientation payload round-trips through the wire format", () => {
   const payload = encodeOrientationPayload(orientation);
 
   assert.equal(payload.byteLength, 20);
@@ -54,76 +57,120 @@ test("decoders honor a typed array's byte offset", () => {
   );
 });
 
-test("button payload round-trips and leaves reserved byte zeroed", () => {
-  const packet = { t: 9876, pressed: true, press_count: 42 };
-  const payload = encodeButtonPayload(packet);
+test("capabilities describe variable input counts", () => {
+  const payload = encodeCapabilitiesPayload({
+    axisCount: 8,
+    buttonCount: 7,
+    joystickCount: 3,
+  });
 
-  assert.deepEqual([...payload], [
-    0x94, 0x26, 0x00, 0x00,
-    0x01, 0x00, 0x2a, 0x00,
-  ]);
-  assert.deepEqual(decodeButtonPayload(payload), {
-    type: "button",
-    ...packet,
+  assert.deepEqual([...payload], [2, 1, 8, 7, 3, 0, 0, 0]);
+  assert.deepEqual(decodeCapabilitiesPayload(payload), {
+    type: "capabilities",
+    protocolVersion: 2,
+    reportVersion: 1,
+    axisCount: 8,
+    buttonCount: 7,
+    joystickCount: 3,
   });
 });
 
-test("joystick payload encodes two normalized axes and button flags", () => {
-  const packet = {
+test("axis input reports support offsets and the 20-byte BLE limit", () => {
+  const report = {
+    reportType: "axes",
     t: 0x01020304,
-    joysticks: [
-      { x: 0.5, y: -1, pressed: true },
-      { x: 0, y: 0.25, pressed: false },
-    ],
+    offset: 4,
+    values: [0.5, -1, 0, 0.25, 1, -0.5],
   };
-  const payload = encodeJoystickPayload(packet);
+  const payload = encodeInputReportPayload(report);
 
-  assert.deepEqual([...payload], [
-    0x04, 0x03, 0x02, 0x01,
-    0x00, 0x40, 0x01, 0x80,
-    0x00, 0x00, 0x00, 0x20,
-    0x01, 0x00,
+  assert.equal(payload.byteLength, 20);
+  const decoded = decodeInputReportPayload(payload);
+  assert.equal(decoded.reportType, "axes");
+  assert.equal(decoded.offset, 4);
+  assert.equal(decoded.values.length, 6);
+  assert.ok(Math.abs(decoded.values[0] - 0.5) < 0.0001);
+  assert.equal(decoded.values[1], -1);
+  assert.equal(decoded.values[4], 1);
+});
+
+test("button input reports bit-pack arbitrary button banks", () => {
+  const values = Array.from({ length: 17 }, (_, index) =>
+    [0, 7, 8, 16].includes(index)
+  );
+  const payload = encodeInputReportPayload({
+    reportType: "buttons",
+    t: 123,
+    offset: 12,
+    values,
+  });
+
+  assert.equal(payload.byteLength, 11);
+  assert.deepEqual(decodeInputReportPayload(payload), {
+    type: "input-report",
+    reportType: "buttons",
+    t: 123,
+    offset: 12,
+    values,
+  });
+});
+
+test("input reports update immutable React-friendly state", () => {
+  const initial = createInputState({
+    axisCount: 4,
+    buttonCount: 3,
+    joystickCount: 2,
+  });
+  const withAxes = applyInputReport(initial, {
+    type: "input-report",
+    reportType: "axes",
+    t: 10,
+    offset: 0,
+    values: [0.5, -0.25, 1, 0],
+  });
+  const complete = applyInputReport(withAxes, {
+    type: "input-report",
+    reportType: "buttons",
+    t: 10,
+    offset: 0,
+    values: [true, false, true],
+  });
+
+  assert.notEqual(withAxes, initial);
+  assert.deepEqual(initial.axes, [0, 0, 0, 0]);
+  assert.deepEqual(complete.buttons, [true, false, true]);
+  assert.deepEqual(toJoystickStates(complete), [
+    { x: 0.5, y: -0.25, pressed: true },
+    { x: 1, y: 0, pressed: false },
   ]);
-
-  const decoded = decodeJoystickPayload(payload);
-  assert.equal(decoded.type, "joystick");
-  assert.equal(decoded.t, packet.t);
-  assert.equal(decoded.joysticks[0].pressed, true);
-  assert.equal(decoded.joysticks[1].pressed, false);
-  assert.ok(Math.abs(decoded.joysticks[0].x - 0.5) < 0.0001);
-  assert.equal(decoded.joysticks[0].y, -1);
-  assert.equal(decoded.joysticks[1].x, 0);
-  assert.ok(Math.abs(decoded.joysticks[1].y - 0.25) < 0.0001);
 });
 
 test("characteristic decoder dispatches by UUID case-insensitively", () => {
-  const buttonPayload = encodeButtonPayload({
-    t: 1,
-    pressed: false,
-    press_count: 2,
+  const capabilitiesPayload = encodeCapabilitiesPayload({
+    axisCount: 4,
+    buttonCount: 3,
+    joystickCount: 2,
   });
-
   assert.equal(
     decodeCharacteristicValue(
-      BLE.buttonCharacteristicUuid.toUpperCase(),
-      buttonPayload
+      BLE.capabilitiesCharacteristicUuid.toUpperCase(),
+      capabilitiesPayload
     ).type,
-    "button"
+    "capabilities"
   );
 
-  const joystickPayload = encodeJoystickPayload({
+  const inputPayload = encodeInputReportPayload({
+    reportType: "buttons",
     t: 1,
-    joysticks: [
-      { x: 0, y: 0, pressed: false },
-      { x: 0, y: 0, pressed: false },
-    ],
+    offset: 0,
+    values: [true, false, true],
   });
   assert.equal(
     decodeCharacteristicValue(
-      BLE.joystickCharacteristicUuid.toUpperCase(),
-      joystickPayload
+      BLE.inputCharacteristicUuid.toUpperCase(),
+      inputPayload
     ).type,
-    "joystick"
+    "input-report"
   );
 });
 
@@ -150,16 +197,36 @@ test("encoders reject values that do not fit on the wire", () => {
   );
   assert.throws(
     () =>
-      encodeJoystickPayload({
+      encodeInputReportPayload({
+        reportType: "axes",
         t: 1,
-        joysticks: [
-          { x: 1.1, y: 0, pressed: false },
-          { x: 0, y: 0, pressed: false },
-        ],
+        offset: 0,
+        values: [1.1],
       }),
     (error) =>
       error instanceof DendenProtocolError &&
       error.code === "INVALID_FIELD" &&
-      error.field === "joysticks[0].x"
+      error.field === "values[0]"
+  );
+  assert.throws(
+    () =>
+      encodeCapabilitiesPayload({
+        axisCount: 2,
+        buttonCount: 2,
+        joystickCount: 2,
+      }),
+    (error) =>
+      error instanceof DendenProtocolError &&
+      error.code === "INVALID_FIELD" &&
+      error.field === "axisCount"
+  );
+  assert.throws(
+    () =>
+      decodeInputReportPayload(
+        new Uint8Array([0, 0, 0, 0, 1, 1, 0, 6])
+      ),
+    (error) =>
+      error instanceof DendenProtocolError &&
+      error.code === "INVALID_PAYLOAD_LENGTH"
   );
 });

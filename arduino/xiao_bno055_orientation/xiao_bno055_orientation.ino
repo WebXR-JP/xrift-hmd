@@ -4,8 +4,7 @@
   BNO055からUARTで姿勢を読み、スイッチとジョイスティックの状態を合わせて
   次の2経路へ配信する。
     1. USB Serial: デバッグしやすいJSON Lines
-    2. Bluetooth LE: 姿勢20バイト、スイッチ8バイト、
-       ジョイスティック14バイトの固定長Notify
+    2. Bluetooth LE: 姿勢、Capabilities、可変長Input Report
 
   AE-BNO055-BOは電源投入前にUARTモードへ設定すること。
 
@@ -31,17 +30,13 @@
         18: int8_t temperature
         19: uint8_t calibration（SYS/GYR/ACC/MAGを各2bit）
 
-  スイッチNotifyペイロード（little-endian、合計8バイト）:
+  Input Report共通ヘッダー（little-endian、8バイト）:
      0.. 3: uint32_t millis()
-         4: uint8_t flags（bit 0: pressed）
-         5: uint8_t reserved
-     6.. 7: uint16_t press count（起動後の押下回数）
-
-  ジョイスティックNotifyペイロード（little-endian、合計14バイト）:
-     0.. 3: uint32_t millis()
-     4..11: int16_t joystick 1 X/Y, joystick 2 X/Y（1.0 = 32767）
-        12: uint8_t flags（bit 0/1: joystick 1/2 pressed）
-        13: uint8_t reserved
+         4: uint8_t report version
+         5: uint8_t kind（1: axes、2: buttons）
+         6: uint8_t offset
+         7: uint8_t count
+  axesはint16_t配列（1.0 = 32767）、buttonsはbit packedで続く。
 */
 
 #include <Arduino.h>
@@ -53,11 +48,22 @@ constexpr uint32_t kUsbSerialBaud = 115200;
 constexpr uint32_t kSensorUartBaud = 115200;
 constexpr int8_t kSensorRxPin = 20;  // XIAO ESP32C3 D7
 constexpr int8_t kSensorTxPin = 21;  // XIAO ESP32C3 D6
-constexpr int8_t kButtonPin = 10;     // XIAO ESP32C3 D10
 constexpr int8_t kJoystickXPin = 3;  // XIAO ESP32C3 D1 / ADC1_CH3
 constexpr int8_t kJoystickYPin = 4;  // XIAO ESP32C3 D2 / ADC1_CH4
-constexpr int8_t kJoystickMuxSelectPin = 5;  // XIAO ESP32C3 D3
-constexpr int8_t kJoystickButtonPins[] = {6, 7};  // D4, D5
+constexpr int8_t kJoystickMuxSelectPins[] = {5};  // XIAO ESP32C3 D3
+
+struct JoystickConfig {
+  uint8_t muxChannel;
+  int8_t buttonPin;
+};
+
+// 増設時はMUXチャネルと押し込みピンを1行追加する。
+constexpr JoystickConfig kJoysticks[] = {
+    {0, 6},  // Joystick 1 / D4
+    {1, 7},  // Joystick 2 / D5
+};
+// タクトスイッチの増設はピンを追加する。順序はInput Report上の番号になる。
+constexpr int8_t kTactButtonPins[] = {10};  // D10
 constexpr uint16_t kSampleIntervalMs = 20;  // 50 Hz
 constexpr uint16_t kJoystickUsbIntervalMs = 40;  // 25 Hz
 constexpr uint16_t kStatusIntervalMs = 500;
@@ -91,9 +97,24 @@ constexpr uint8_t kUseExternalCrystal = 0x80;
 // 0x1Aから14バイト読むとEuler角6バイトとQuaternion8バイトを一括取得できる。
 constexpr uint8_t kOrientationPayloadLength = 14;
 constexpr uint8_t kBlePayloadLength = 20;
-constexpr uint8_t kBleButtonPayloadLength = 8;
-constexpr uint8_t kBleJoystickPayloadLength = 14;
-constexpr uint8_t kJoystickCount = 2;
+constexpr uint8_t kBleCapabilitiesPayloadLength = 8;
+constexpr uint8_t kBleInputPayloadMaximum = 20;
+constexpr uint8_t kBleInputHeaderLength = 8;
+constexpr uint8_t kInputReportVersion = 1;
+constexpr uint8_t kInputReportAxes = 1;
+constexpr uint8_t kInputReportButtons = 2;
+constexpr uint8_t kInputAxesPerReport = 6;
+constexpr uint8_t kInputButtonsPerReport = 96;
+constexpr uint8_t kJoystickCount =
+    sizeof(kJoysticks) / sizeof(kJoysticks[0]);
+constexpr uint8_t kTactButtonCount =
+    sizeof(kTactButtonPins) / sizeof(kTactButtonPins[0]);
+constexpr uint8_t kAxisCount = kJoystickCount * 2;
+constexpr uint8_t kInputButtonCount =
+    kJoystickCount + kTactButtonCount;
+constexpr uint8_t kMuxSelectPinCount =
+    sizeof(kJoystickMuxSelectPins) / sizeof(kJoystickMuxSelectPins[0]);
+constexpr uint8_t kMuxChannelCount = 1 << kMuxSelectPinCount;
 constexpr uint8_t kJoystickAverageSamples = 4;
 constexpr uint8_t kJoystickCalibrationSamples = 32;
 constexpr int32_t kJoystickAxisMaximum = 32767;
@@ -103,15 +124,18 @@ constexpr double kEulerScale = 1.0 / 16.0;
 constexpr double kJoystickScale = 1.0 / kJoystickAxisMaximum;
 
 constexpr char kBleDeviceName[] = "DENDEN-VR";
-constexpr char kButtonPinName[] = "D10";
 constexpr char kBleServiceUuid[] =
     "f3641400-00b0-4240-ba50-05ca45bf8abc";
 constexpr char kBleOrientationUuid[] =
     "f3641401-00b0-4240-ba50-05ca45bf8abc";
-constexpr char kBleButtonUuid[] =
+constexpr char kBleCapabilitiesUuid[] =
     "f3641402-00b0-4240-ba50-05ca45bf8abc";
-constexpr char kBleJoystickUuid[] =
+constexpr char kBleInputUuid[] =
     "f3641403-00b0-4240-ba50-05ca45bf8abc";
+
+static_assert(
+    kJoystickCount <= kMuxChannelCount,
+    "Joystick count exceeds the configured MUX address width");
 
 // 温度・キャリブレーションは姿勢より更新頻度が低いためキャッシュする。
 uint8_t cachedCalibration = 0;
@@ -119,19 +143,14 @@ int8_t cachedTemperature = 0;
 uint32_t uartErrorCount = 0;
 bool sensorReady = false;
 
-// 機械接点のチャタリングを除去するため、生入力と確定状態を別々に保持する。
-bool buttonRawPressed = false;
-bool buttonPressed = false;
-uint32_t buttonRawChangedAt = 0;
-uint16_t buttonPressCount = 0;
-
 int16_t joystickX[kJoystickCount] = {};
 int16_t joystickY[kJoystickCount] = {};
-uint16_t joystickCenterX[kJoystickCount] = {2048, 2048};
-uint16_t joystickCenterY[kJoystickCount] = {2048, 2048};
-bool joystickButtonRawPressed[kJoystickCount] = {};
-bool joystickButtonPressed[kJoystickCount] = {};
-uint32_t joystickButtonRawChangedAt[kJoystickCount] = {};
+uint16_t joystickCenterX[kJoystickCount] = {};
+uint16_t joystickCenterY[kJoystickCount] = {};
+// 機械接点のチャタリングを除去するため、生入力と確定状態を別々に保持する。
+bool inputButtonRawPressed[kInputButtonCount] = {};
+bool inputButtonPressed[kInputButtonCount] = {};
+uint32_t inputButtonRawChangedAt[kInputButtonCount] = {};
 
 // BLEコールバックはBluetoothタスクから呼ばれるため、loop()と共有する値はvolatileにする。
 volatile bool bleConnected = false;
@@ -140,8 +159,8 @@ volatile bool bleConnectionEventPending = false;
 volatile bool bleConnectionEventState = false;
 BLEServer *bleServer = nullptr;
 BLECharacteristic *bleOrientationCharacteristic = nullptr;
-BLECharacteristic *bleButtonCharacteristic = nullptr;
-BLECharacteristic *bleJoystickCharacteristic = nullptr;
+BLECharacteristic *bleCapabilitiesCharacteristic = nullptr;
+BLECharacteristic *bleInputCharacteristic = nullptr;
 
 class OrientationServerCallbacks : public BLEServerCallbacks {
  public:
@@ -317,11 +336,6 @@ void writeUint32Le(uint8_t *buffer, uint32_t value) {
   buffer[3] = (value >> 24) & 0xFF;
 }
 
-void writeUint16Le(uint8_t *buffer, uint16_t value) {
-  buffer[0] = value & 0xFF;
-  buffer[1] = (value >> 8) & 0xFF;
-}
-
 void writeInt16Le(uint8_t *buffer, int16_t value) {
   const uint16_t raw = static_cast<uint16_t>(value);
   buffer[0] = raw & 0xFF;
@@ -340,8 +354,23 @@ int16_t normalizeJoystickAxis(uint16_t raw, uint16_t center) {
       constrain(scaled, -kJoystickAxisMaximum, kJoystickAxisMaximum));
 }
 
+int8_t inputButtonPin(uint8_t index) {
+  if (index < kJoystickCount) {
+    return kJoysticks[index].buttonPin;
+  }
+  return kTactButtonPins[index - kJoystickCount];
+}
+
+void selectJoystickMuxChannel(uint8_t channel) {
+  for (uint8_t bit = 0; bit < kMuxSelectPinCount; bit++) {
+    digitalWrite(
+        kJoystickMuxSelectPins[bit],
+        (channel & (1 << bit)) != 0 ? HIGH : LOW);
+  }
+}
+
 void readJoystickRaw(uint8_t index, uint16_t &rawX, uint16_t &rawY) {
-  digitalWrite(kJoystickMuxSelectPin, index == 0 ? LOW : HIGH);
+  selectJoystickMuxChannel(kJoysticks[index].muxChannel);
   delayMicroseconds(20);
 
   // MUX切り替え直後のADCサンプルは捨て、4回平均でポテンショメータのノイズを抑える。
@@ -385,17 +414,6 @@ void sampleJoysticks() {
   }
 }
 
-void writeJoystickPayload(uint8_t *payload, uint32_t timestamp) {
-  writeUint32Le(&payload[0], timestamp);
-  writeInt16Le(&payload[4], joystickX[0]);
-  writeInt16Le(&payload[6], joystickY[0]);
-  writeInt16Le(&payload[8], joystickX[1]);
-  writeInt16Le(&payload[10], joystickY[1]);
-  payload[12] =
-      (joystickButtonPressed[0] ? 0x01 : 0x00) |
-      (joystickButtonPressed[1] ? 0x02 : 0x00);
-}
-
 bool hasValidQuaternionNorm(
     int16_t quaternionW,
     int16_t quaternionX,
@@ -435,37 +453,31 @@ void initializeBle() {
   // 0x2902(CCCD)はブラウザがNotify購読を有効化するために必要。
   bleOrientationCharacteristic->addDescriptor(new BLE2902());
 
-  // スイッチは姿勢とは更新周期が異なるため別Characteristicにする。
-  // これにより、既定ATT MTUで収まる20バイト姿勢形式との互換性も維持できる。
-  bleButtonCharacteristic = service->createCharacteristic(
-      kBleButtonUuid,
-      BLECharacteristic::PROPERTY_READ |
-          BLECharacteristic::PROPERTY_NOTIFY);
-  bleButtonCharacteristic->addDescriptor(new BLE2902());
-
-  bleJoystickCharacteristic = service->createCharacteristic(
-      kBleJoystickUuid,
-      BLECharacteristic::PROPERTY_READ |
-          BLECharacteristic::PROPERTY_NOTIFY);
-  bleJoystickCharacteristic->addDescriptor(new BLE2902());
+  bleCapabilitiesCharacteristic = service->createCharacteristic(
+      kBleCapabilitiesUuid,
+      BLECharacteristic::PROPERTY_READ);
+  bleInputCharacteristic = service->createCharacteristic(
+      kBleInputUuid,
+      BLECharacteristic::PROPERTY_NOTIFY);
+  bleInputCharacteristic->addDescriptor(new BLE2902());
 
   // 接続直後にREADされても必ず20バイト返るよう、初期値も固定長にする。
   uint8_t initialValue[kBlePayloadLength] = {};
   bleOrientationCharacteristic->setValue(
       initialValue, sizeof(initialValue));
 
-  // Web側はNotify購読後にREADして、接続前から押されていた状態も取得する。
-  uint8_t initialButtonValue[kBleButtonPayloadLength] = {};
-  writeUint32Le(&initialButtonValue[0], millis());
-  initialButtonValue[4] = buttonPressed ? 0x01 : 0x00;
-  writeUint16Le(&initialButtonValue[6], buttonPressCount);
-  bleButtonCharacteristic->setValue(
-      initialButtonValue, sizeof(initialButtonValue));
-
-  uint8_t initialJoystickValue[kBleJoystickPayloadLength] = {};
-  writeJoystickPayload(initialJoystickValue, millis());
-  bleJoystickCharacteristic->setValue(
-      initialJoystickValue, sizeof(initialJoystickValue));
+  uint8_t capabilities[kBleCapabilitiesPayloadLength] = {
+      2,
+      kInputReportVersion,
+      kAxisCount,
+      kInputButtonCount,
+      kJoystickCount,
+      0,
+      0,
+      0,
+  };
+  bleCapabilitiesCharacteristic->setValue(
+      capabilities, sizeof(capabilities));
   service->start();
 
   BLEAdvertising *advertising = BLEDevice::getAdvertising();
@@ -505,101 +517,116 @@ void notifyBleOrientation(
   bleOrientationCharacteristic->notify();
 }
 
-void publishButtonState(uint32_t timestamp, bool sendNotification) {
-  if (bleButtonCharacteristic == nullptr) {
+int16_t inputAxisValue(uint8_t index) {
+  const uint8_t joystickIndex = index / 2;
+  return (index & 0x01) == 0
+      ? joystickX[joystickIndex]
+      : joystickY[joystickIndex];
+}
+
+void publishInputAxes(uint32_t timestamp) {
+  if (!bleConnected || bleInputCharacteristic == nullptr) {
     return;
   }
 
-  uint8_t payload[kBleButtonPayloadLength] = {};
-  writeUint32Le(&payload[0], timestamp);
-  payload[4] = buttonPressed ? 0x01 : 0x00;
-  // payload[5]は将来のフラグ追加に備えて0のまま予約する。
-  writeUint16Le(&payload[6], buttonPressCount);
-
-  // 未接続中もCharacteristicのREAD値を最新状態へ更新しておく。
-  bleButtonCharacteristic->setValue(payload, sizeof(payload));
-  if (sendNotification && bleConnected) {
-    bleButtonCharacteristic->notify();
-  }
-}
-
-void publishJoystickState(uint32_t timestamp) {
-  if (bleJoystickCharacteristic == nullptr) {
-    return;
-  }
-
-  uint8_t payload[kBleJoystickPayloadLength] = {};
-  writeJoystickPayload(payload, timestamp);
-  bleJoystickCharacteristic->setValue(payload, sizeof(payload));
-  if (bleConnected) {
-    bleJoystickCharacteristic->notify();
-  }
-}
-
-void printButtonEvent(uint32_t timestamp) {
-  Serial.print("{\"type\":\"button\",\"t\":");
-  Serial.print(timestamp);
-  Serial.print(",\"pressed\":");
-  Serial.print(buttonPressed ? "true" : "false");
-  Serial.print(",\"press_count\":");
-  Serial.print(buttonPressCount);
-  Serial.println("}");
-}
-
-void updateButton(uint32_t now) {
-  // INPUT_PULLUPなのでLOWが押下。生入力が変わるたびに安定待ち時間をやり直す。
-  const bool rawPressed = digitalRead(kButtonPin) == LOW;
-  if (rawPressed != buttonRawPressed) {
-    buttonRawPressed = rawPressed;
-    buttonRawChangedAt = now;
-  }
-
-  // 同じ値が一定時間続いた場合だけ確定し、接点バウンスによる多重押下を防ぐ。
-  if (
-      rawPressed != buttonPressed &&
-      now - buttonRawChangedAt >= kButtonDebounceMs) {
-    buttonPressed = rawPressed;
-    if (buttonPressed) {
-      buttonPressCount++;
+  for (uint8_t offset = 0; offset < kAxisCount;) {
+    const uint8_t remaining = kAxisCount - offset;
+    const uint8_t count =
+        remaining < kInputAxesPerReport
+            ? remaining
+            : kInputAxesPerReport;
+    uint8_t payload[kBleInputPayloadMaximum] = {};
+    writeUint32Le(&payload[0], timestamp);
+    payload[4] = kInputReportVersion;
+    payload[5] = kInputReportAxes;
+    payload[6] = offset;
+    payload[7] = count;
+    for (uint8_t index = 0; index < count; index++) {
+      writeInt16Le(
+          &payload[kBleInputHeaderLength + index * 2],
+          inputAxisValue(offset + index));
     }
-    publishButtonState(now, true);
-    printButtonEvent(now);
+    const uint8_t length = kBleInputHeaderLength + count * 2;
+    bleInputCharacteristic->setValue(payload, length);
+    bleInputCharacteristic->notify();
+    offset += count;
   }
 }
 
-void updateJoystickButtons(uint32_t now) {
-  for (uint8_t index = 0; index < kJoystickCount; index++) {
-    const bool rawPressed =
-        digitalRead(kJoystickButtonPins[index]) == LOW;
-    if (rawPressed != joystickButtonRawPressed[index]) {
-      joystickButtonRawPressed[index] = rawPressed;
-      joystickButtonRawChangedAt[index] = now;
+void publishInputButtons(uint32_t timestamp) {
+  if (!bleConnected || bleInputCharacteristic == nullptr) {
+    return;
+  }
+
+  for (uint8_t offset = 0; offset < kInputButtonCount;) {
+    const uint8_t remaining = kInputButtonCount - offset;
+    const uint8_t count =
+        remaining < kInputButtonsPerReport
+            ? remaining
+            : kInputButtonsPerReport;
+    uint8_t payload[kBleInputPayloadMaximum] = {};
+    writeUint32Le(&payload[0], timestamp);
+    payload[4] = kInputReportVersion;
+    payload[5] = kInputReportButtons;
+    payload[6] = offset;
+    payload[7] = count;
+    for (uint8_t index = 0; index < count; index++) {
+      if (inputButtonPressed[offset + index]) {
+        payload[kBleInputHeaderLength + (index >> 3)] |=
+            1 << (index & 0x07);
+      }
+    }
+    const uint8_t length =
+        kBleInputHeaderLength + (count + 7) / 8;
+    bleInputCharacteristic->setValue(payload, length);
+    bleInputCharacteristic->notify();
+    offset += count;
+  }
+}
+
+void publishInputState(uint32_t timestamp) {
+  publishInputAxes(timestamp);
+  publishInputButtons(timestamp);
+}
+
+void updateInputButtons(uint32_t now) {
+  for (uint8_t index = 0; index < kInputButtonCount; index++) {
+    // INPUT_PULLUPなのでLOWが押下。生入力が変わるたびに安定待ち時間をやり直す。
+    const bool rawPressed = digitalRead(inputButtonPin(index)) == LOW;
+    if (rawPressed != inputButtonRawPressed[index]) {
+      inputButtonRawPressed[index] = rawPressed;
+      inputButtonRawChangedAt[index] = now;
     }
 
     if (
-        rawPressed != joystickButtonPressed[index] &&
-        now - joystickButtonRawChangedAt[index] >= kButtonDebounceMs) {
-      joystickButtonPressed[index] = rawPressed;
+        rawPressed != inputButtonPressed[index] &&
+        now - inputButtonRawChangedAt[index] >= kButtonDebounceMs) {
+      inputButtonPressed[index] = rawPressed;
+      publishInputButtons(now);
     }
   }
 }
 
-void printJoystickSample(uint32_t timestamp) {
-  Serial.print("{\"type\":\"joystick\",\"t\":");
+void printInputSample(uint32_t timestamp) {
+  Serial.print("{\"type\":\"input\",\"t\":");
   Serial.print(timestamp);
-  Serial.print(",\"joysticks\":[{\"x\":");
-  Serial.print(joystickX[0] * kJoystickScale, 4);
-  Serial.print(",\"y\":");
-  Serial.print(joystickY[0] * kJoystickScale, 4);
-  Serial.print(",\"pressed\":");
-  Serial.print(joystickButtonPressed[0] ? "true" : "false");
-  Serial.print("},{\"x\":");
-  Serial.print(joystickX[1] * kJoystickScale, 4);
-  Serial.print(",\"y\":");
-  Serial.print(joystickY[1] * kJoystickScale, 4);
-  Serial.print(",\"pressed\":");
-  Serial.print(joystickButtonPressed[1] ? "true" : "false");
-  Serial.println("}]}");
+  Serial.print(",\"joystick_count\":");
+  Serial.print(kJoystickCount);
+  Serial.print(",\"axes\":[");
+  for (uint8_t index = 0; index < kAxisCount; index++) {
+    if (index > 0) {
+      Serial.print(',');
+    }
+    Serial.print(inputAxisValue(index) * kJoystickScale, 4);
+  }
+  Serial.print("],\"buttons\":[");
+  for (uint8_t index = 0; index < kInputButtonCount; index++) {
+    if (index > 0) {
+      Serial.print(',');
+    }
+    Serial.print(inputButtonPressed[index] ? "true" : "false");
+  }
+  Serial.println("]}");
 }
 
 void printJsonString(const char *value) {
@@ -638,9 +665,13 @@ void printReady() {
       "\"read_mode\":\"uart\",\"rate_hz\":50,"
       "\"ble_name\":\"");
   Serial.print(kBleDeviceName);
-  Serial.print("\",\"button_pin\":\"");
-  Serial.print(kButtonPinName);
-  Serial.println("\"}");
+  Serial.print("\",\"protocol_version\":2,\"axis_count\":");
+  Serial.print(kAxisCount);
+  Serial.print(",\"button_count\":");
+  Serial.print(kInputButtonCount);
+  Serial.print(",\"joystick_count\":");
+  Serial.print(kJoystickCount);
+  Serial.println("}");
 }
 
 void printBleConnectionEvent() {
@@ -657,21 +688,17 @@ void setup() {
     delay(10);
   }
 
-  // D10とGNDの間にスイッチを接続する。起動時の状態をBLE初期値へ反映する。
-  pinMode(kButtonPin, INPUT_PULLUP);
-  buttonRawPressed = digitalRead(kButtonPin) == LOW;
-  buttonPressed = buttonRawPressed;
-  buttonRawChangedAt = millis();
-
-  pinMode(kJoystickMuxSelectPin, OUTPUT);
-  digitalWrite(kJoystickMuxSelectPin, LOW);
+  for (uint8_t index = 0; index < kMuxSelectPinCount; index++) {
+    pinMode(kJoystickMuxSelectPins[index], OUTPUT);
+    digitalWrite(kJoystickMuxSelectPins[index], LOW);
+  }
   analogReadResolution(12);
-  for (uint8_t index = 0; index < kJoystickCount; index++) {
-    pinMode(kJoystickButtonPins[index], INPUT_PULLUP);
-    joystickButtonRawPressed[index] =
-        digitalRead(kJoystickButtonPins[index]) == LOW;
-    joystickButtonPressed[index] = joystickButtonRawPressed[index];
-    joystickButtonRawChangedAt[index] = millis();
+  for (uint8_t index = 0; index < kInputButtonCount; index++) {
+    const int8_t pin = inputButtonPin(index);
+    pinMode(pin, INPUT_PULLUP);
+    inputButtonRawPressed[index] = digitalRead(pin) == LOW;
+    inputButtonPressed[index] = inputButtonRawPressed[index];
+    inputButtonRawChangedAt[index] = millis();
   }
   calibrateJoysticks();
   sampleJoysticks();
@@ -717,17 +744,16 @@ void loop() {
   }
 
   // センサー未接続時や50Hz待機中でも、スイッチは毎loopで監視して遅延を抑える。
-  updateButton(now);
-  updateJoystickButtons(now);
+  updateInputButtons(now);
 
   if (now - lastJoystickSampleAt >= kSampleIntervalMs) {
     lastJoystickSampleAt = now;
     sampleJoysticks();
-    publishJoystickState(now);
+    publishInputState(now);
 
     if (now - lastJoystickUsbAt >= kJoystickUsbIntervalMs) {
       lastJoystickUsbAt = now;
-      printJoystickSample(now);
+      printInputSample(now);
     }
   }
 
@@ -825,10 +851,6 @@ void loop() {
   Serial.print(calAccel);
   Serial.print(",\"mag\":");
   Serial.print(calMag);
-  Serial.print("},\"button\":{\"pressed\":");
-  Serial.print(buttonPressed ? "true" : "false");
-  Serial.print(",\"press_count\":");
-  Serial.print(buttonPressCount);
   Serial.print("},\"uart_errors\":");
   Serial.print(uartErrorCount);
   Serial.println("}");

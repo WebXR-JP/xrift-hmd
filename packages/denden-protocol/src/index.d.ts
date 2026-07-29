@@ -25,52 +25,86 @@ export type OrientationPacketInput = Omit<OrientationPacket, "type"> & {
   type?: "imu";
 };
 
-export interface ButtonPacket {
-  type: "button";
-  t: number;
-  pressed: boolean;
-  press_count: number;
-}
-
-export type ButtonPacketInput = Omit<ButtonPacket, "type"> & {
-  type?: "button";
-};
-
 export interface JoystickState {
   x: number;
   y: number;
   pressed: boolean;
 }
 
-export interface JoystickPacket {
-  type: "joystick";
-  t: number;
-  joysticks: [JoystickState, JoystickState];
+export interface Capabilities {
+  type: "capabilities";
+  protocolVersion: 2;
+  reportVersion: 1;
+  axisCount: number;
+  buttonCount: number;
+  joystickCount: number;
 }
 
-export type JoystickPacketInput = Omit<JoystickPacket, "type"> & {
-  type?: "joystick";
+export type CapabilitiesInput = Omit<
+  Capabilities,
+  "type" | "protocolVersion" | "reportVersion"
+> & {
+  type?: "capabilities";
+  protocolVersion?: 2;
+  reportVersion?: 1;
 };
+
+export interface AxesInputReport {
+  type: "input-report";
+  reportType: "axes";
+  t: number;
+  offset: number;
+  values: number[];
+}
+
+export interface ButtonsInputReport {
+  type: "input-report";
+  reportType: "buttons";
+  t: number;
+  offset: number;
+  values: boolean[];
+}
+
+export type InputReport = AxesInputReport | ButtonsInputReport;
+export type InputReportInput =
+  | Omit<AxesInputReport, "type">
+  | Omit<ButtonsInputReport, "type">;
+
+export interface InputState {
+  type: "input";
+  t: number;
+  axes: number[];
+  buttons: boolean[];
+  joystickCount: number;
+}
 
 export type DendenPacket =
   | OrientationPacket
-  | ButtonPacket
-  | JoystickPacket;
+  | Capabilities
+  | InputReport;
 
-export const PROTOCOL_VERSION: 1;
+export const PROTOCOL_VERSION: 2;
+export const INPUT_REPORT_VERSION: 1;
 export const ORIENTATION_PAYLOAD_LENGTH: 20;
-export const BUTTON_PAYLOAD_LENGTH: 8;
-export const JOYSTICK_PAYLOAD_LENGTH: 14;
+export const CAPABILITIES_PAYLOAD_LENGTH: 8;
+export const INPUT_REPORT_HEADER_LENGTH: 8;
+export const INPUT_REPORT_MAX_LENGTH: 20;
+export const INPUT_REPORT_MAX_AXES: 6;
+export const INPUT_REPORT_MAX_BUTTONS: 96;
 export const QUATERNION_SCALE: 16384;
 export const EULER_SCALE: 16;
-export const JOYSTICK_AXIS_SCALE: 32767;
+export const INPUT_AXIS_SCALE: 32767;
+export const INPUT_REPORT_KIND: Readonly<{
+  axes: 1;
+  buttons: 2;
+}>;
 
 export const BLE: Readonly<{
   deviceName: "DENDEN-VR";
   serviceUuid: "f3641400-00b0-4240-ba50-05ca45bf8abc";
   orientationCharacteristicUuid: "f3641401-00b0-4240-ba50-05ca45bf8abc";
-  buttonCharacteristicUuid: "f3641402-00b0-4240-ba50-05ca45bf8abc";
-  joystickCharacteristicUuid: "f3641403-00b0-4240-ba50-05ca45bf8abc";
+  capabilitiesCharacteristicUuid: "f3641402-00b0-4240-ba50-05ca45bf8abc";
+  inputCharacteristicUuid: "f3641403-00b0-4240-ba50-05ca45bf8abc";
 }>;
 
 export class DendenProtocolError extends Error {
@@ -90,12 +124,29 @@ export function decodeOrientationPayload(
 export function encodeOrientationPayload(
   packet: OrientationPacketInput
 ): Uint8Array;
-export function decodeButtonPayload(payload: BinaryPayload): ButtonPacket;
-export function encodeButtonPayload(packet: ButtonPacketInput): Uint8Array;
-export function decodeJoystickPayload(payload: BinaryPayload): JoystickPacket;
-export function encodeJoystickPayload(
-  packet: JoystickPacketInput
+export function decodeCapabilitiesPayload(
+  payload: BinaryPayload
+): Capabilities;
+export function encodeCapabilitiesPayload(
+  capabilities: CapabilitiesInput
 ): Uint8Array;
+export function decodeInputReportPayload(
+  payload: BinaryPayload
+): InputReport;
+export function encodeInputReportPayload(
+  report: InputReportInput
+): Uint8Array;
+export function createInputState(
+  capabilities: Pick<
+    Capabilities,
+    "axisCount" | "buttonCount" | "joystickCount"
+  >
+): InputState;
+export function applyInputReport(
+  state: InputState,
+  report: InputReport
+): InputState;
+export function toJoystickStates(state: InputState): JoystickState[];
 export function decodeCharacteristicValue(
   characteristicUuid: string,
   payload: BinaryPayload

@@ -1,7 +1,7 @@
 {
   "name": "denden-protocol",
-  "version": "0.1.0",
-  "description": "DENDEN VRプロトコルのトランスポート非依存codecとBLE識別子",
+  "version": "0.2.0",
+  "description": "DENDEN VRプロトコルの汎用入力codecとBLE識別子",
   "license": "MIT",
   "type": "module",
   "exports": {

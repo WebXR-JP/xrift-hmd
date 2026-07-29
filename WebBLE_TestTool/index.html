@@ -516,46 +516,20 @@
 
         <section class="panel">
           <h2>タクトスイッチ</h2>
-          <div class="metrics" aria-live="polite">
+          <div class="metrics" id="tactButtonList" aria-live="polite">
             <div class="metric">
-              <div class="metric-label">D10 / GPIO10</div>
-              <div class="metric-value switch-state" id="buttonState">未受信</div>
-            </div>
-            <div class="metric">
-              <div class="metric-label">Press count</div>
-              <div class="metric-value" id="buttonCount">--</div>
+              <div class="metric-label">入力構成</div>
+              <div class="metric-value">未受信</div>
             </div>
           </div>
         </section>
 
         <section class="panel">
           <h2>ジョイスティック</h2>
-          <div class="joystick-list" aria-live="polite">
-            <div class="joystick-row">
-              <div class="joystick-pad" aria-hidden="true">
-                <span class="joystick-dot" id="joystick1Dot"></span>
-              </div>
-              <div class="joystick-details">
-                <div class="joystick-title">Joystick 1</div>
-                <div class="joystick-values">
-                  <span>X <strong id="joystick1X">--</strong></span>
-                  <span>Y <strong id="joystick1Y">--</strong></span>
-                  <span class="switch-state" id="joystick1Button">未受信</span>
-                </div>
-              </div>
-            </div>
-            <div class="joystick-row">
-              <div class="joystick-pad" aria-hidden="true">
-                <span class="joystick-dot" id="joystick2Dot"></span>
-              </div>
-              <div class="joystick-details">
-                <div class="joystick-title">Joystick 2</div>
-                <div class="joystick-values">
-                  <span>X <strong id="joystick2X">--</strong></span>
-                  <span>Y <strong id="joystick2Y">--</strong></span>
-                  <span class="switch-state" id="joystick2Button">未受信</span>
-                </div>
-              </div>
+          <div class="joystick-list" id="joystickList" aria-live="polite">
+            <div class="metric">
+              <div class="metric-label">入力構成</div>
+              <div class="metric-value">未受信</div>
             </div>
           </div>
         </section>
@@ -604,9 +578,12 @@
   <script type="module">
     import {
       BLE,
-      decodeButtonPayload,
-      decodeJoystickPayload,
+      applyInputReport,
+      createInputState,
+      decodeCapabilitiesPayload,
+      decodeInputReportPayload,
       decodeOrientationPayload,
+      toJoystickStates,
     } from "../packages/denden-protocol/src/index.js";
 
     // ESP32側と共有する通信仕様。BLE UUIDを変更する場合はスケッチ側も同時に変更する。
@@ -614,8 +591,8 @@
     const bleDeviceName = BLE.deviceName;
     const bleServiceUuid = BLE.serviceUuid;
     const bleOrientationUuid = BLE.orientationCharacteristicUuid;
-    const bleButtonUuid = BLE.buttonCharacteristicUuid;
-    const bleJoystickUuid = BLE.joystickCharacteristicUuid;
+    const bleCapabilitiesUuid = BLE.capabilitiesCharacteristicUuid;
+    const bleInputUuid = BLE.inputCharacteristicUuid;
     const threeModuleUrl = "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js";
 
     // DOM参照は起動時に一度だけ取得し、50Hzの受信処理では検索し直さない。
@@ -637,24 +614,10 @@
     const calGyro = document.getElementById("calGyro");
     const calAccel = document.getElementById("calAccel");
     const calMag = document.getElementById("calMag");
-    const buttonState = document.getElementById("buttonState");
-    const buttonCount = document.getElementById("buttonCount");
-    const joystickDots = [
-      document.getElementById("joystick1Dot"),
-      document.getElementById("joystick2Dot"),
-    ];
-    const joystickXValues = [
-      document.getElementById("joystick1X"),
-      document.getElementById("joystick2X"),
-    ];
-    const joystickYValues = [
-      document.getElementById("joystick1Y"),
-      document.getElementById("joystick2Y"),
-    ];
-    const joystickButtons = [
-      document.getElementById("joystick1Button"),
-      document.getElementById("joystick2Button"),
-    ];
+    const tactButtonList = document.getElementById("tactButtonList");
+    const joystickList = document.getElementById("joystickList");
+    let joystickElements = [];
+    let tactButtonElements = [];
 
     // USB SerialとBLEは同じhandlePacket()へ合流する。
     // connectionKindだけを見れば、切断ボタンやステータス表示を共通化できる。
@@ -667,8 +630,9 @@
     let bleDevice = null;
     let bleServer = null;
     let bleCharacteristic = null;
-    let bleButtonCharacteristic = null;
-    let bleJoystickCharacteristic = null;
+    let bleCapabilitiesCharacteristic = null;
+    let bleInputCharacteristic = null;
+    let inputState = null;
     let lastPacketAt = 0;
     let packetsThisSecond = 0;
     let framesThisSecond = 0;
@@ -862,64 +826,142 @@
       calGyro.textContent = data.cal?.gyro ?? "--";
       calAccel.textContent = data.cal?.accel ?? "--";
       calMag.textContent = data.cal?.mag ?? "--";
-      if (data.button) {
-        updateButtonTelemetry(data.button);
-      }
     }
 
-    function updateButtonTelemetry(data) {
-      if (typeof data?.pressed !== "boolean") {
+    function appendTextElement(parent, tagName, className, text) {
+      const element = document.createElement(tagName);
+      element.className = className;
+      element.textContent = text;
+      parent.append(element);
+      return element;
+    }
+
+    function showInputPlaceholder(container) {
+      container.replaceChildren();
+      const metric = appendTextElement(container, "div", "metric", "");
+      appendTextElement(metric, "div", "metric-label", "入力構成");
+      appendTextElement(metric, "div", "metric-value", "未受信");
+    }
+
+    function configureInputUi(capabilities) {
+      const matchesCurrent =
+        inputState &&
+        inputState.axes.length === capabilities.axisCount &&
+        inputState.buttons.length === capabilities.buttonCount &&
+        inputState.joystickCount === capabilities.joystickCount;
+      if (matchesCurrent) {
         return;
       }
 
-      buttonState.textContent = data.pressed ? "押下中" : "離している";
-      buttonState.dataset.pressed = String(data.pressed);
-      buttonCount.textContent = Number.isInteger(data.press_count)
-        ? String(data.press_count)
-        : "--";
-    }
+      inputState = createInputState(capabilities);
+      joystickElements = [];
+      tactButtonElements = [];
+      joystickList.replaceChildren();
+      tactButtonList.replaceChildren();
 
-    function resetButtonTelemetry() {
-      buttonState.textContent = "未受信";
-      delete buttonState.dataset.pressed;
-      buttonCount.textContent = "--";
-    }
-
-    function updateJoystickTelemetry(data) {
-      if (!Array.isArray(data?.joysticks) || data.joysticks.length !== 2) {
-        return;
+      for (let index = 0; index < capabilities.joystickCount; index += 1) {
+        const row = appendTextElement(
+          joystickList,
+          "div",
+          "joystick-row",
+          ""
+        );
+        const pad = appendTextElement(row, "div", "joystick-pad", "");
+        pad.setAttribute("aria-hidden", "true");
+        const dot = appendTextElement(pad, "span", "joystick-dot", "");
+        const details = appendTextElement(
+          row,
+          "div",
+          "joystick-details",
+          ""
+        );
+        appendTextElement(
+          details,
+          "div",
+          "joystick-title",
+          `Joystick ${index + 1}`
+        );
+        const values = appendTextElement(
+          details,
+          "div",
+          "joystick-values",
+          ""
+        );
+        const xLabel = appendTextElement(values, "span", "", "X ");
+        const xValue = appendTextElement(xLabel, "strong", "", "--");
+        const yLabel = appendTextElement(values, "span", "", "Y ");
+        const yValue = appendTextElement(yLabel, "strong", "", "--");
+        const button = appendTextElement(
+          values,
+          "span",
+          "switch-state",
+          "未受信"
+        );
+        joystickElements.push({ dot, xValue, yValue, button });
       }
 
-      data.joysticks.forEach((joystick, index) => {
-        if (
-          !Number.isFinite(joystick?.x) ||
-          !Number.isFinite(joystick?.y) ||
-          typeof joystick?.pressed !== "boolean"
-        ) {
-          return;
-        }
+      const tactCount =
+        capabilities.buttonCount - capabilities.joystickCount;
+      if (tactCount === 0) {
+        appendTextElement(
+          tactButtonList,
+          "div",
+          "metric",
+          "タクトスイッチなし"
+        );
+      }
+      for (let index = 0; index < tactCount; index += 1) {
+        const metric = appendTextElement(
+          tactButtonList,
+          "div",
+          "metric",
+          ""
+        );
+        appendTextElement(
+          metric,
+          "div",
+          "metric-label",
+          `Button ${capabilities.joystickCount + index + 1}`
+        );
+        const state = appendTextElement(
+          metric,
+          "div",
+          "metric-value switch-state",
+          "未受信"
+        );
+        tactButtonElements.push(state);
+      }
+    }
 
+    function updateInputTelemetry(state) {
+      toJoystickStates(state).forEach((joystick, index) => {
+        const elements = joystickElements[index];
         const x = Math.max(-1, Math.min(1, joystick.x));
         const y = Math.max(-1, Math.min(1, joystick.y));
-        joystickDots[index].style.left = `${(x + 1) * 50}%`;
-        joystickDots[index].style.top = `${(1 - y) * 50}%`;
-        joystickXValues[index].textContent = formatNumber(x, 2);
-        joystickYValues[index].textContent = formatNumber(y, 2);
-        joystickButtons[index].textContent =
+        elements.dot.style.left = `${(x + 1) * 50}%`;
+        elements.dot.style.top = `${(1 - y) * 50}%`;
+        elements.xValue.textContent = formatNumber(x, 2);
+        elements.yValue.textContent = formatNumber(y, 2);
+        elements.button.textContent =
           joystick.pressed ? "押下中" : "離している";
-        joystickButtons[index].dataset.pressed = String(joystick.pressed);
+        elements.button.dataset.pressed = String(joystick.pressed);
       });
+
+      state.buttons
+        .slice(state.joystickCount)
+        .forEach((pressed, index) => {
+          const element = tactButtonElements[index];
+          element.textContent = pressed ? "押下中" : "離している";
+          element.dataset.pressed = String(pressed);
+        });
     }
 
-    function resetJoystickTelemetry() {
-      for (let index = 0; index < 2; index += 1) {
-        joystickDots[index].style.left = "50%";
-        joystickDots[index].style.top = "50%";
-        joystickXValues[index].textContent = "--";
-        joystickYValues[index].textContent = "--";
-        joystickButtons[index].textContent = "未受信";
-        delete joystickButtons[index].dataset.pressed;
-      }
+    function resetInputTelemetry() {
+      inputState = null;
+      joystickElements = [];
+      tactButtonElements = [];
+      showInputPlaceholder(joystickList);
+      showInputPlaceholder(tactButtonList);
     }
 
     function resetOrientationSamples() {
@@ -1303,6 +1345,17 @@
     function handlePacket(data) {
       // USB JSONとBLEバイナリを共通形式へ揃えた後の、唯一の姿勢入力口。
       if (data.type === "ready") {
+        if (
+          Number.isInteger(data.axis_count) &&
+          Number.isInteger(data.button_count) &&
+          Number.isInteger(data.joystick_count)
+        ) {
+          configureInputUi({
+            axisCount: data.axis_count,
+            buttonCount: data.button_count,
+            joystickCount: data.joystick_count,
+          });
+        }
         setStatus("センサー準備完了", "ok");
         appendLog(data.read_mode ? `ready: ${data.read_mode}` : "ready");
         return;
@@ -1314,16 +1367,24 @@
         return;
       }
 
-      if (data.type === "button") {
-        updateButtonTelemetry(data);
-        appendLog(
-          `button: ${data.pressed ? "pressed" : "released"} (${data.press_count ?? "--"})`
-        );
-        return;
-      }
-
-      if (data.type === "joystick") {
-        updateJoystickTelemetry(data);
+      if (
+        data.type === "input" &&
+        Array.isArray(data.axes) &&
+        Array.isArray(data.buttons) &&
+        Number.isInteger(data.joystick_count)
+      ) {
+        configureInputUi({
+          axisCount: data.axes.length,
+          buttonCount: data.buttons.length,
+          joystickCount: data.joystick_count,
+        });
+        inputState = {
+          ...inputState,
+          t: Number(data.t) || 0,
+          axes: data.axes.slice(),
+          buttons: data.buttons.slice(),
+        };
+        updateInputTelemetry(inputState);
         return;
       }
 
@@ -1396,41 +1457,37 @@
       }
     }
 
-    function handleBleButtonValue(view) {
-      let data;
+    function handleBleCapabilitiesValue(view) {
       try {
-        data = decodeButtonPayload(view);
-      } catch (error) {
-        appendLog(`invalid BLE button packet: ${error.message}`);
-        return null;
-      }
-
-      updateButtonTelemetry(data);
-      return data;
-    }
-
-    function handleBleButtonNotification(event) {
-      const data = handleBleButtonValue(event.target.value);
-      if (data) {
+        const capabilities = decodeCapabilitiesPayload(view);
+        configureInputUi(capabilities);
         appendLog(
-          `button: ${data.pressed ? "pressed" : "released"} (${data.press_count})`
+          `inputs: ${capabilities.axisCount} axes / ${capabilities.buttonCount} buttons`
         );
-      }
-    }
-
-    function handleBleJoystickValue(view) {
-      try {
-        const data = decodeJoystickPayload(view);
-        updateJoystickTelemetry(data);
-        return data;
+        return capabilities;
       } catch (error) {
-        appendLog(`invalid BLE joystick packet: ${error.message}`);
+        appendLog(`invalid BLE capabilities: ${error.message}`);
         return null;
       }
     }
 
-    function handleBleJoystickNotification(event) {
-      handleBleJoystickValue(event.target.value);
+    function handleBleInputValue(view) {
+      try {
+        if (!inputState) {
+          throw new Error("Capabilitiesを先に読み取る必要があります");
+        }
+        const report = decodeInputReportPayload(view);
+        inputState = applyInputReport(inputState, report);
+        updateInputTelemetry(inputState);
+        return report;
+      } catch (error) {
+        appendLog(`invalid BLE input report: ${error.message}`);
+        return null;
+      }
+    }
+
+    function handleBleInputNotification(event) {
+      handleBleInputValue(event.target.value);
     }
 
     async function readSerialLoop() {
@@ -1477,8 +1534,7 @@
         await port.open({ baudRate });
         connectionKind = "serial";
         lineBuffer = "";
-        resetButtonTelemetry();
-        resetJoystickTelemetry();
+        resetInputTelemetry();
         setButtons(true);
         setStatus("USB接続済み", "ok");
         appendLog(`opened at ${baudRate} baud`);
@@ -1519,8 +1575,7 @@
       }
       hasReading = false;
       resetOrientationSamples();
-      resetButtonTelemetry();
-      resetJoystickTelemetry();
+      resetInputTelemetry();
       setButtons(false);
       setStatus("未接続");
       appendLog("USB closed");
@@ -1528,8 +1583,8 @@
 
     function handleBleDisconnected() {
       bleCharacteristic = null;
-      bleButtonCharacteristic = null;
-      bleJoystickCharacteristic = null;
+      bleCapabilitiesCharacteristic = null;
+      bleInputCharacteristic = null;
       bleServer = null;
       bleDevice = null;
       if (connectionKind === "ble") {
@@ -1537,8 +1592,7 @@
       }
       hasReading = false;
       resetOrientationSamples();
-      resetButtonTelemetry();
-      resetJoystickTelemetry();
+      resetInputTelemetry();
       setButtons(false);
       setStatus("BLE切断", "warn");
       appendLog("BLE disconnected");
@@ -1602,31 +1656,25 @@
         bleCharacteristic = await service.getCharacteristic(
           bleOrientationUuid
         );
-        bleButtonCharacteristic = await service.getCharacteristic(
-          bleButtonUuid
+        bleCapabilitiesCharacteristic = await service.getCharacteristic(
+          bleCapabilitiesUuid
         );
-        bleJoystickCharacteristic = await service.getCharacteristic(
-          bleJoystickUuid
+        bleInputCharacteristic = await service.getCharacteristic(
+          bleInputUuid
         );
         bleCharacteristic.addEventListener(
           "characteristicvaluechanged",
           handleBleNotification
         );
         await bleCharacteristic.startNotifications();
-        bleButtonCharacteristic.addEventListener(
-          "characteristicvaluechanged",
-          handleBleButtonNotification
+        handleBleCapabilitiesValue(
+          await bleCapabilitiesCharacteristic.readValue()
         );
-        await bleButtonCharacteristic.startNotifications();
-        bleJoystickCharacteristic.addEventListener(
+        bleInputCharacteristic.addEventListener(
           "characteristicvaluechanged",
-          handleBleJoystickNotification
+          handleBleInputNotification
         );
-        await bleJoystickCharacteristic.startNotifications();
-
-        // 購読開始前から押されていた場合も表示できるよう、現在値を一度READする。
-        handleBleButtonValue(await bleButtonCharacteristic.readValue());
-        handleBleJoystickValue(await bleJoystickCharacteristic.readValue());
+        await bleInputCharacteristic.startNotifications();
 
         connectionKind = "ble";
         hasReading = false;
@@ -1652,8 +1700,8 @@
         bleDevice = null;
         bleServer = null;
         bleCharacteristic = null;
-        bleButtonCharacteristic = null;
-        bleJoystickCharacteristic = null;
+        bleCapabilitiesCharacteristic = null;
+        bleInputCharacteristic = null;
         setButtons(false);
       }
     }
@@ -1667,20 +1715,12 @@
         await bleCharacteristic.stopNotifications().catch(() => {});
       }
 
-      if (bleButtonCharacteristic) {
-        bleButtonCharacteristic.removeEventListener(
+      if (bleInputCharacteristic) {
+        bleInputCharacteristic.removeEventListener(
           "characteristicvaluechanged",
-          handleBleButtonNotification
+          handleBleInputNotification
         );
-        await bleButtonCharacteristic.stopNotifications().catch(() => {});
-      }
-
-      if (bleJoystickCharacteristic) {
-        bleJoystickCharacteristic.removeEventListener(
-          "characteristicvaluechanged",
-          handleBleJoystickNotification
-        );
-        await bleJoystickCharacteristic.stopNotifications().catch(() => {});
+        await bleInputCharacteristic.stopNotifications().catch(() => {});
       }
 
       if (bleDevice) {
@@ -1694,8 +1734,8 @@
       }
 
       bleCharacteristic = null;
-      bleButtonCharacteristic = null;
-      bleJoystickCharacteristic = null;
+      bleCapabilitiesCharacteristic = null;
+      bleInputCharacteristic = null;
       bleServer = null;
       bleDevice = null;
       if (connectionKind === "ble") {
@@ -1703,8 +1743,7 @@
       }
       hasReading = false;
       resetOrientationSamples();
-      resetButtonTelemetry();
-      resetJoystickTelemetry();
+      resetInputTelemetry();
       setButtons(false);
       setStatus("未接続");
       appendLog("BLE closed");

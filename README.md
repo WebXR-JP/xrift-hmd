@@ -14,7 +14,7 @@ Bluetooth LE の両方へ配信します。ブラウザ側のビューアでは�
 | --- | --- |
 | `arduino/xiao_bno055_orientation/` | XIAO ESP32C3 に書き込む Arduino ファームウェア |
 | `WebBLE_TestTool/` | USB Serial / Web Bluetooth で姿勢を確認するブラウザビューア |
-| `packages/denden-protocol/` | BLE バイナリの共通codecとDENDEN VRプロトコル v1仕様 |
+| `packages/denden-protocol/` | BLEバイナリの共通codecとDENDEN VRプロトコルv2仕様 |
 
 ## ハードウェア
 
@@ -89,6 +89,20 @@ pin 16 (`VCC`) とpin 8 (`GND`) の直近に0.1 uFのセラミックコンデン
 起動時に32サンプルを使って各軸の中央を自動校正します。電源投入またはリセット時は
 2本とも手を離してください。中央付近には約3%のdead zoneを適用します。
 
+### 入力の増設
+
+ファームウェア先頭の設定配列で入力構成を定義します。
+
+- ジョイスティックは`kJoysticks`へMUXチャネルと押し込みピンを追加する
+- タクトスイッチは`kTactButtonPins`へピンを追加する
+- 軸数、ボタン数、BLEの分割数、USB JSON、TestToolの表示数は自動で追従する
+
+現在のTC74HC4053AP配線は2チャネル切替のため、ジョイスティックは2本までです。
+3本以上へ増設する場合は、X軸用とY軸用にアドレス線を共有できる多チャネルMUXへ
+交換し、`kJoystickMuxSelectPins`へアドレスピンを追加します。タクトスイッチは
+利用可能なGPIOの範囲なら配列への追加だけで増設できます。GPIOが不足する場合は
+I/Oエキスパンダーが必要です。
+
 ## ファームウェア
 
 1. Arduino IDE の Boards Manager で ESP32 ボードを追加します。
@@ -102,15 +116,16 @@ ESP32 Core 付属の BLE ライブラリを使うため、追加の Arduino ラ�
 - BNO055 を UART 経由で初期化し、NDOF モードで姿勢を取得する
 - USB Serial に JSON Lines 形式で姿勢データを出力する
 - Bluetooth LE の Notify で姿勢を 20 バイトのバイナリ形式で配信する
-- タクトスイッチをデバウンスし、状態変化を専用 BLE Characteristic で通知する
-- 2本のジョイスティックをMUX経由で読み、BLE 50 Hz / USB JSON 25 Hzで配信する
+- Capabilitiesで接続中の軸数、ボタン数、ジョイスティック数を公開する
+- ジョイスティックとタクトスイッチを汎用Input Reportで配信する
 - 温度、キャリブレーション状態、UART エラー数を付加する
 
 USB Serial の出力例:
 
 ```json
-{"type":"imu","t":12345,"qw":0.998901,"qx":0.012345,"qy":-0.003210,"qz":0.045678,"heading":12.34,"roll":1.23,"pitch":-0.45,"temp_c":27,"cal":{"sys":3,"gyro":3,"accel":3,"mag":2},"button":{"pressed":false,"press_count":0},"uart_errors":0}
-{"type":"joystick","t":12360,"joysticks":[{"x":0.1250,"y":-0.5000,"pressed":false},{"x":0.0000,"y":1.0000,"pressed":true}]}
+{"type":"ready","sensor":"BNO055","protocol_version":2,"axis_count":4,"button_count":3,"joystick_count":2}
+{"type":"imu","t":12345,"qw":0.998901,"qx":0.012345,"qy":-0.003210,"qz":0.045678,"heading":12.34,"roll":1.23,"pitch":-0.45,"temp_c":27,"cal":{"sys":3,"gyro":3,"accel":3,"mag":2},"uart_errors":0}
+{"type":"input","t":12360,"joystick_count":2,"axes":[0.1250,-0.5000,0.0000,1.0000],"buttons":[false,true,false]}
 ```
 
 ## Bluetooth LE
@@ -118,16 +133,16 @@ USB Serial の出力例:
 BLE デバイス名は `DENDEN-VR` です。
 
 アプリケーション側でペイロードを直接読む必要はありません。
-[`denden-protocol`](packages/denden-protocol/README.md) が、姿勢とボタンの
-encode/decode、TypeScript型、BLE UUIDを提供します。ワイヤ仕様は
-[`DENDEN VRプロトコル v1`](packages/denden-protocol/SPEC.md) に分離しています。
+[`denden-protocol`](packages/denden-protocol/README.md) が、姿勢と汎用入力の
+encode/decode、入力state更新、TypeScript型、BLE UUIDを提供します。ワイヤ仕様は
+[`DENDEN VRプロトコル v2`](packages/denden-protocol/SPEC.md) に分離しています。
 
 | 種別 | UUID |
 | --- | --- |
 | Service | `f3641400-00b0-4240-ba50-05ca45bf8abc` |
 | Orientation Notify Characteristic | `f3641401-00b0-4240-ba50-05ca45bf8abc` |
-| Button Read / Notify Characteristic | `f3641402-00b0-4240-ba50-05ca45bf8abc` |
-| Joystick Read / Notify Characteristic | `f3641403-00b0-4240-ba50-05ca45bf8abc` |
+| Capabilities Read Characteristic | `f3641402-00b0-4240-ba50-05ca45bf8abc` |
+| Input Report Notify Characteristic | `f3641403-00b0-4240-ba50-05ca45bf8abc` |
 
 姿勢Notify payload は little-endian の 20 バイトです。
 
@@ -139,31 +154,30 @@ encode/decode、TypeScript型、BLE UUIDを提供します。ワイヤ仕様は
 | `18` | `int8_t` | 温度 |
 | `19` | `uint8_t` | Calibration。`SYS/GYR/ACC/MAG` を各 2 bit で格納 |
 
-ボタンNotify payload は little-endian の 8 バイトです。
+Capabilitiesはlittle-endianの8バイトです。
+
+| Offset | 型 | 内容 |
+| --- | --- | --- |
+| `0` | `uint8_t` | プロトコルバージョン。現在は`2` |
+| `1` | `uint8_t` | Input Reportバージョン。現在は`1` |
+| `2` | `uint8_t` | 軸数 |
+| `3` | `uint8_t` | ボタン数 |
+| `4` | `uint8_t` | ジョイスティック数 |
+| `5..7` | `uint8_t[3]` | 予約領域 |
+
+Input Reportは8バイトの共通ヘッダーと可変長データで構成します。
 
 | Offset | 型 | 内容 |
 | --- | --- | --- |
 | `0..3` | `uint32_t` | `millis()` |
-| `4` | `uint8_t` | Flags。bit 0 が `1` のとき押下中 |
-| `5` | `uint8_t` | 予約領域 |
-| `6..7` | `uint16_t` | 起動後の押下回数 |
+| `4` | `uint8_t` | Reportバージョン |
+| `5` | `uint8_t` | `1`: axes、`2`: buttons |
+| `6` | `uint8_t` | 先頭の入力番号 |
+| `7` | `uint8_t` | 値の数 |
+| `8..` | 可変 | axesは`int16_t`配列、buttonsはbit packed |
 
-ボタン特性は状態変化時にNotifyされます。接続直後はWebページが一度READするため、
-接続前から押していた場合も現在状態を取得できます。押下回数はXIAOの再起動で
-`0` に戻ります。
-
-ジョイスティックNotify payloadはlittle-endianの14バイトです。軸値はADCの中央を
-`0`、両端をおおむね `-1.0` と `1.0` に正規化します。
-
-| Offset | 型 | 内容 |
-| --- | --- | --- |
-| `0..3` | `uint32_t` | `millis()` |
-| `4..5` | `int16_t` | Joystick 1 X。`1.0 = 32767` |
-| `6..7` | `int16_t` | Joystick 1 Y。`1.0 = 32767` |
-| `8..9` | `int16_t` | Joystick 2 X。`1.0 = 32767` |
-| `10..11` | `int16_t` | Joystick 2 Y。`1.0 = 32767` |
-| `12` | `uint8_t` | Flags。bit 0/1がJoystick 1/2の押下状態 |
-| `13` | `uint8_t` | 予約領域 |
+1回の通知は既定ATT MTUに収まる最大20バイトです。軸が6個、ボタンが96個を
+超える場合はoffsetを進めて複数のReportへ自動分割します。
 
 ## ブラウザビューア
 
@@ -183,8 +197,8 @@ python -m http.server 8000
 - BLE で使う場合は `BLE接続` を押し、`DENDEN-VR` を選びます。
 - `ゼロ合わせ` は現在の姿勢を表示上の基準姿勢にします。
 - `軸変換` は実機の取り付け方向と画面上の回転方向が合わない場合に変更します。
-- タクトスイッチ欄には現在の押下状態と起動後の押下回数が表示されます。
-- ジョイスティック欄には2本の位置、正規化したX/Y値、押し込み状態が表示されます。
+- タクトスイッチとジョイスティックの表示数はCapabilitiesから自動生成されます。
+- ジョイスティック欄には位置、正規化したX/Y値、押し込み状態が表示されます。
 
 Web Bluetooth は HTTPS または `localhost` のセキュアコンテキストが必要です。
 iPhone / iPad の Safari は Web Bluetooth API に対応していません。
